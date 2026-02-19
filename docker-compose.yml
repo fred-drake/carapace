@@ -1,0 +1,91 @@
+# Carapace local development — docker compose up
+#
+# Orchestrates the host-side core process and the agent container.
+# Socket sharing via a named volume. Skill files are bind-mounted
+# for live-reload during development.
+#
+# Usage:
+#   docker compose up --build        # build + start everything
+#   docker compose up --build core   # rebuild and start core only
+#   docker compose logs -f agent     # tail agent logs
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+
+services:
+  # -------------------------------------------------------------------------
+  # Core — host-side message router + plugin host
+  # -------------------------------------------------------------------------
+  core:
+    build:
+      context: .
+      target: builder
+    command: ['node', 'dist/index.js']
+    volumes:
+      # Shared ZeroMQ socket volume (read-write)
+      - zmq-socket:/run/sockets
+      # Host plugins directory (live-reload during dev)
+      - ./plugins:/app/plugins:ro
+      # Persistent data (audit logs, SQLite, memory)
+      - ./data:/app/data
+      # Config file
+      - ./config.toml:/app/config.toml:ro
+    networks:
+      - carapace
+    environment:
+      - NODE_ENV=development
+      - CARAPACE_SOCKET_PATH=/run/sockets/carapace.sock
+    healthcheck:
+      test: ['CMD', 'node', '-e', 'process.exit(0)']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # -------------------------------------------------------------------------
+  # Agent — isolated container running Claude Code
+  # -------------------------------------------------------------------------
+  agent:
+    build:
+      context: .
+      target: runtime
+    entrypoint: ['/bin/sh', '/app/entrypoint.sh']
+    read_only: true
+    depends_on:
+      core:
+        condition: service_healthy
+    volumes:
+      # Shared ZeroMQ socket volume (read-write for IPC)
+      - zmq-socket:/run/sockets
+      # Agent workspace (read-write for agent work files)
+      - ./workspace:/workspace/group
+      # Skill files (bind-mount for live-reload, read-only)
+      - ./skills:/home/carapace/.claude/skills:ro
+      # Entrypoint script
+      - ./src/container/entrypoint.sh:/app/entrypoint.sh:ro
+    tmpfs:
+      # Writable scratch for node/claude runtime needs
+      - /tmp:size=64M
+      - /home/carapace/.claude:size=32M
+    networks:
+      carapace:
+    environment:
+      - CARAPACE_SOCKET_PATH=/run/sockets/carapace.sock
+    # No stdin_open — credentials are piped at startup by lifecycle manager
+
+# ---------------------------------------------------------------------------
+# Networks
+# ---------------------------------------------------------------------------
+
+networks:
+  carapace:
+    driver: bridge
+    internal: true
+
+# ---------------------------------------------------------------------------
+# Volumes
+# ---------------------------------------------------------------------------
+
+volumes:
+  zmq-socket:
+    driver: local
