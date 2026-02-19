@@ -27,6 +27,6 @@ export {
 
 export { FakeSocketFactory } from './fake-socket-factory.js';
 
-export { MockContainerRuntime, type StopCallRecord } from './mock-container-runtime.js';
+export { MockContainerRuntime } from '../core/container/mock-runtime.js';
 
 export { IpcTestHarness } from './ipc-test-harness.js';
