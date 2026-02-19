@@ -31,8 +31,9 @@ config, and directory layout: `src/core/`, `src/ipc/`, `src/plugins/`, `src/type
 files. TypeScript strict mode enabled. ESM module system configured.
 **Complexity**: S
 
-### ARCH-02: Define message envelope types
+### ~~ARCH-02: Define message envelope types~~ DONE
 
+**Status**: Completed (PR #5, merged 2026-02-18)
 **Role**: Architect / Engineer
 **Description**: Create TypeScript interfaces for the full message protocol:
 `WireMessage` (topic, correlation, arguments), `Envelope` (id, version, type, topic,
@@ -48,8 +49,9 @@ All 10 error codes are defined with `retriable`, `stage`, `field`, and `retry_af
 metadata where applicable.
 **Complexity**: M
 
-### ARCH-03: Define plugin manifest schema and types
+### ~~ARCH-03: Define plugin manifest schema and types~~ DONE
 
+**Status**: Completed (PR #6, merged 2026-02-18)
 **Role**: Architect / Engineer
 **Description**: Create TypeScript interfaces and JSON Schema for plugin manifests:
 tool declarations (name, description, risk_level, argument schema), hook subscriptions,
@@ -126,8 +128,9 @@ routable after loading. Plugin lifecycle hooks fire in correct order. Failed plu
 are excluded from catalog, not from the system.
 **Complexity**: L
 
-### QA-01: Set up test framework
+### ~~QA-01: Set up test framework~~ DONE
 
+**Status**: Completed (PR #7, merged 2026-02-18)
 **Role**: QA
 **Description**: Configure Vitest with TypeScript support, path alias resolution
 matching tsconfig, and coverage reporting (v8 provider). Set up test directory
@@ -196,8 +199,9 @@ error paths have tests. Exit codes are verified. Wire message construction is va
 against ARCH-02 types.
 **Complexity**: S
 
-### DEVOPS-01: Create container Dockerfile
+### ~~DEVOPS-01: Create container Dockerfile~~ DONE
 
+**Status**: Completed (PR #8, merged 2026-02-18)
 **Role**: DevOps
 **Description**: Build a multi-stage Dockerfile for the agent container. Build stage
 compiles the `ipc` binary from TypeScript. Runtime stage uses Node.js 22 base with
@@ -212,8 +216,9 @@ is executable. Writable mounts work for workspace and socket. Image tags follow
 versioning strategy.
 **Complexity**: M
 
-### DEVOPS-02: Configure CI pipeline
+### ~~DEVOPS-02: Configure CI pipeline~~ DONE
 
+**Status**: Completed (PR #9, merged 2026-02-18)
 **Role**: DevOps
 **Description**: Set up GitHub Actions CI with a multi-stage pipeline designed for
 fast feedback first, security scanning second, integration tests last. See the
