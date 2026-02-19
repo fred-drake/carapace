@@ -13,6 +13,7 @@
 import type { PluginContext, ToolInvocationResult } from '../../core/plugin-handler.js';
 import type { MemoryStore, MemoryEntryType, SearchResult } from './memory-store.js';
 import { ErrorCode } from '../../types/errors.js';
+import { stripAllNewlines } from './memory-security.js';
 
 // ---------------------------------------------------------------------------
 // Rate limit defaults
@@ -47,16 +48,11 @@ interface SessionLimits {
 }
 
 // ---------------------------------------------------------------------------
-// Newline stripping
+// Newline stripping — delegated to memory-security module
 // ---------------------------------------------------------------------------
 
-/**
- * Strip all newline variants from content: \r\n, \r, \n,
- * Unicode U+2028 (line separator), U+2029 (paragraph separator).
- */
-function stripNewlines(content: string): string {
-  return content.replace(/\r\n|\r|\n|\u2028|\u2029/g, ' ');
-}
+// stripAllNewlines is imported from memory-security.ts and covers all
+// Unicode newline variants: LF, CR, CRLF, VT, FF, NEL, LS, PS.
 
 // ---------------------------------------------------------------------------
 // MemoryHandler
@@ -229,7 +225,7 @@ export class MemoryHandler {
     for (const entry of sorted) {
       if (briefEntries.length >= this.briefConfig.maxBriefEntries) break;
 
-      const strippedContent = stripNewlines(entry.content);
+      const strippedContent = stripAllNewlines(entry.content);
       if (charCount + strippedContent.length > this.briefConfig.maxBriefChars) break;
 
       const ageDays = Math.floor(
