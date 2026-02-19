@@ -1,0 +1,234 @@
+rules:
+  # ---------------------------------------------------------------------------
+  # Rule 1: no-identity-in-wire-format
+  #
+  # The container sends only 3 fields: topic, correlation, arguments.
+  # Identity fields (id, version, type, source, group, timestamp) MUST be
+  # constructed from trusted session state, never read from wire input.
+  # See docs/ARCHITECTURE.md and src/types/protocol.ts.
+  # ---------------------------------------------------------------------------
+  - id: carapace.no-identity-in-wire-format
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >
+      Identity field is being read from wire input. The core constructs
+      identity fields (id, version, type, source, group, timestamp) from
+      trusted session state. Reading them from wire input allows container
+      spoofing. Use session.source / session.group instead of wire.source /
+      wire.group. Suppress with
+      `// nosemgrep: carapace.no-identity-in-wire-format`.
+    metadata:
+      category: security
+      confidence: HIGH
+      impact: HIGH
+      cwe: 'CWE-284: Improper Access Control'
+      references:
+        - docs/ARCHITECTURE.md
+    pattern-either:
+      - pattern: wire.source
+      - pattern: wire.group
+      - pattern: wire.id
+      - pattern: wire.type
+      - pattern: wire.timestamp
+    paths:
+      include:
+        - src/core/pipeline/
+
+  # ---------------------------------------------------------------------------
+  # Rule 2: require-additional-properties-false
+  #
+  # All JSON Schema objects in manifest definitions and tool schemas must
+  # include `additionalProperties: false` to prevent untrusted data injection.
+  # ---------------------------------------------------------------------------
+  - id: carapace.require-additional-properties-false
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >
+      JSON Schema object with type 'object' and properties is missing
+      `additionalProperties: false`. All schema objects must explicitly reject
+      unknown properties to prevent data injection through extra fields.
+      Add `additionalProperties: false` to this schema object. Suppress with
+      `// nosemgrep: carapace.require-additional-properties-false`.
+    metadata:
+      category: security
+      confidence: MEDIUM
+      impact: HIGH
+      cwe: 'CWE-20: Improper Input Validation'
+    patterns:
+      - pattern: |
+          {type: 'object' as const, properties: {...}, ...}
+      - pattern-not: |
+          {type: 'object' as const, properties: {...}, additionalProperties: false, ...}
+    paths:
+      include:
+        - src/types/manifest-schema.ts
+
+  # ---------------------------------------------------------------------------
+  # Rule 3a: parameterized-sqlite-queries (template literal interpolation)
+  #
+  # All better-sqlite3 queries must use .prepare() with bound parameters (?).
+  # Template literal interpolation of variables in SQL is forbidden.
+  # ---------------------------------------------------------------------------
+  - id: carapace.parameterized-sqlite-queries-template
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >
+      SQL query uses template literal interpolation with .prepare(). Use
+      parameterized queries with `?` placeholders and pass values to .run(),
+      .get(), or .all() instead. Replace `${variable}` with `?` and pass the
+      value as a parameter. Suppress with
+      `// nosemgrep: carapace.parameterized-sqlite-queries-template`.
+    metadata:
+      category: security
+      confidence: HIGH
+      impact: CRITICAL
+      cwe: 'CWE-89: SQL Injection'
+    patterns:
+      - pattern: '$DB.prepare(`...${$VAR}...`)'
+      - pattern-not: '$DB.prepare(`...${$SAFE.join(...)}...`)'
+    paths:
+      include:
+        - src/plugins/
+        - src/core/
+
+  # ---------------------------------------------------------------------------
+  # Rule 3b: parameterized-sqlite-queries (string concatenation)
+  # ---------------------------------------------------------------------------
+  - id: carapace.parameterized-sqlite-queries-concat
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >
+      SQL query uses string concatenation with .prepare(). Use parameterized
+      queries with `?` placeholders instead. Suppress with
+      `// nosemgrep: carapace.parameterized-sqlite-queries-concat`.
+    metadata:
+      category: security
+      confidence: HIGH
+      impact: CRITICAL
+      cwe: 'CWE-89: SQL Injection'
+    pattern-either:
+      - pattern: $DB.prepare($SQL + $VAR)
+      - pattern: $DB.prepare($VAR + $SQL)
+    paths:
+      include:
+        - src/plugins/
+        - src/core/
+
+  # ---------------------------------------------------------------------------
+  # Rule 4: no-error-message-passthrough
+  #
+  # Caught exceptions must not have their .message passed into ToolError.
+  # Internal error details may leak to the container.
+  # ---------------------------------------------------------------------------
+  - id: carapace.no-error-message-passthrough
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >
+      Caught error message is being passed through to ToolError. Internal
+      error details may leak to the untrusted container. Use a descriptive
+      static message instead of the caught error's message. Suppress with
+      `// nosemgrep: carapace.no-error-message-passthrough`.
+    metadata:
+      category: security
+      confidence: HIGH
+      impact: HIGH
+      cwe: 'CWE-209: Generation of Error Message Containing Sensitive Information'
+    patterns:
+      - pattern-either:
+          - pattern: 'new ToolError({..., message: $ERR.message, ...})'
+          - pattern: 'new ToolError({..., message: $ERR.toString(), ...})'
+          - pattern: 'new ToolError({..., message: `...${$ERR.message}...`, ...})'
+          - pattern: 'new ToolError({..., message: `...${$ERR}...`, ...})'
+      - pattern-inside: |
+          catch ($ERR) {
+            ...
+          }
+    paths:
+      include:
+        - src/plugins/
+        - src/core/
+
+  # ---------------------------------------------------------------------------
+  # Rule 5a: no-credentials-in-responses (process.env)
+  #
+  # Environment variables must never appear in response objects returned
+  # to the container.
+  # ---------------------------------------------------------------------------
+  - id: carapace.no-credentials-in-responses
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >
+      Environment variable is included in a return value. Responses are sent
+      to the untrusted container and must not contain secrets. Remove the
+      credential from the response, or use the ResponseSanitizer to redact
+      sensitive values. Suppress with
+      `// nosemgrep: carapace.no-credentials-in-responses`.
+    metadata:
+      category: security
+      confidence: MEDIUM
+      impact: CRITICAL
+      cwe: 'CWE-200: Exposure of Sensitive Information'
+    pattern-either:
+      - pattern: 'return { ..., $KEY: process.env[$NAME], ... }'
+      - pattern: 'return { ..., $KEY: process.env.$NAME, ... }'
+    paths:
+      include:
+        - src/plugins/
+        - src/core/
+
+  # ---------------------------------------------------------------------------
+  # Rule 5b: no-credentials-in-responses (credential field names)
+  # ---------------------------------------------------------------------------
+  - id: carapace.no-credentials-in-response-fields
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >
+      Response includes a credential-like field name. Credential values
+      must never be returned to the untrusted container. Suppress with
+      `// nosemgrep: carapace.no-credentials-in-response-fields`.
+    metadata:
+      category: security
+      confidence: MEDIUM
+      impact: CRITICAL
+      cwe: 'CWE-200: Exposure of Sensitive Information'
+    pattern-either:
+      - pattern: 'return { ..., password: $VAL, ... }'
+      - pattern: 'return { ..., secret: $VAL, ... }'
+      - pattern: 'return { ..., api_key: $VAL, ... }'
+      - pattern: 'return { ..., apiKey: $VAL, ... }'
+      - pattern: 'return { ..., token: $VAL, ... }'
+      - pattern: 'return { ..., connectionString: $VAL, ... }'
+    paths:
+      include:
+        - src/plugins/
+        - src/core/
+
+  # ---------------------------------------------------------------------------
+  # Rule 6: group-isolation (unvalidated DB path construction)
+  #
+  # Database paths must go through SqliteManager.getDatabase() which
+  # validates the group name. Direct Database() construction with
+  # interpolated group values bypasses validation.
+  # ---------------------------------------------------------------------------
+  - id: carapace.group-isolation-db-path
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >
+      Database path is constructed with interpolated values. All database
+      paths must go through SqliteManager.getDatabase() which validates
+      the group name against path traversal. Suppress with
+      `// nosemgrep: carapace.group-isolation-db-path`.
+    metadata:
+      category: security
+      confidence: MEDIUM
+      impact: HIGH
+      cwe: 'CWE-22: Improper Limitation of a Pathname to a Restricted Directory'
+    pattern-either:
+      - pattern: 'new Database(`...${$VAR}...`)'
+      - pattern: new Database($PATH + $VAR)
+    paths:
+      include:
+        - src/plugins/
+      exclude:
+        - src/core/sqlite-manager.ts
+        - '**/*.test.ts'
