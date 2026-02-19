@@ -8,7 +8,8 @@ export type {
   ContainerRuntime,
 } from './runtime.js';
 
-export { detect } from './detect.js';
+export { detect, detectRuntime, listAvailableRuntimes } from './detect.js';
+export type { IsolationLevel, RuntimeInfo, DetectionResult, DetectionOptions } from './detect.js';
 
 export { DockerRuntime, type DockerRuntimeOptions } from './docker-runtime.js';
 export type { ExecFn } from './docker-runtime.js';
