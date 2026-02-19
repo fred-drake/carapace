@@ -1,0 +1,854 @@
+---
+Last Updated: 2026-02-18
+Version: 1.0.0
+---
+
+# Future Features — Carapace Framework
+
+This document catalogs features identified through competitive analysis of
+[OpenClaw](https://github.com/openclaw/openclaw), the open-source personal AI
+agent framework (145,000+ GitHub stars as of February 2026). Each feature is
+evaluated against Carapace's architecture, security model, and design
+philosophy.
+
+Features are organized into tiers by priority and feasibility. Each entry
+includes a rationale, integration notes for Carapace's plugin architecture,
+and the source that motivated it.
+
+---
+
+## Tier 1 — High Priority
+
+These features fill real capability gaps and align with Carapace's existing
+architecture. Most can be implemented as plugins without core changes.
+
+### 1.1 Inbound Webhook Receiver
+
+**What it is:** An HTTP endpoint on the host that accepts incoming webhooks
+from external systems and translates them into events on the PUB/SUB bus.
+External services (CI/CD pipelines, monitoring alerts, IoT devices, home
+automation, payment processors) POST JSON payloads to Carapace, which
+converts them to `message.inbound` or `task.triggered` events that can
+spawn agent sessions.
+
+**Why it matters:** Webhooks are the universal integration surface of the
+modern web. Without them, every external trigger requires a dedicated
+channel plugin. With a webhook receiver, any service that can POST JSON
+can trigger the agent — no custom code needed.
+
+**Carapace integration:**
+
+- Implement as a **core feature** (not a plugin), since it feeds the
+  PUB/SUB event bus that all plugins consume.
+- Bind to `127.0.0.1` by default (localhost only). Remote access is a
+  separate concern (see [1.5 Secure Remote Access](#15-secure-remote-access)).
+- Authenticate requests via HMAC signatures or shared secrets, configured
+  per webhook endpoint.
+- Each webhook endpoint maps to a group + event topic. The core constructs
+  a proper envelope — the webhook sender never touches the internal message
+  format.
+- Rate limit per endpoint to prevent abuse from misconfigured senders.
+
+**Validation pipeline considerations:**
+
+Webhook payloads are untrusted external input. The core must:
+
+1. Verify HMAC signature (reject unsigned or mismatched requests)
+2. Validate payload against a registered JSON Schema per endpoint
+3. Construct an envelope with the webhook's configured group and topic
+4. Publish to the event bus — the normal event-to-agent decision logic
+   takes over from here
+
+**Configuration example:**
+
+```json
+{
+  "webhooks": [
+    {
+      "path": "/hook/github-deploy",
+      "group": "devops",
+      "topic": "task.triggered",
+      "secret": "whsec_...",
+      "payload_schema": { "type": "object", "required": ["action"] }
+    }
+  ]
+}
+```
+
+**Security notes:**
+
+- Webhook secrets stored in host credential store, never in container.
+- Failed HMAC verification logged to audit log with source IP.
+- Payload schema validation prevents oversized or malformed payloads from
+  reaching the event bus.
+
+**Source:**
+OpenClaw provides inbound webhook integration for triggering agent actions
+from external systems.
+([GitHub README](https://github.com/openclaw/openclaw))
+
+---
+
+### 1.2 Usage Tracking and Cost Metrics
+
+**What it is:** Per-session and per-response tracking of token consumption,
+estimated API cost, and cumulative usage over time. Surfaces this data via
+an intrinsic tool (`get_usage`) and optionally in the web dashboard
+(see [2.1](#21-web-dashboard--control-plane)).
+
+**Why it matters:** Without usage visibility, the user has no idea what
+their agent costs to run. This is especially important for personal
+assistants where the user is paying per-token out of pocket. Usage data
+also helps identify expensive patterns (long sessions, excessive tool
+calls) and optimize prompts.
+
+**Carapace integration:**
+
+- The core already manages container lifecycle and routes all messages.
+  Adding token tracking requires intercepting model API responses, which
+  the core can do during session management.
+- Store usage data in a host-side SQLite database (same pattern as
+  memory): `data/usage/{group}.sqlite`.
+- Add a new **core intrinsic tool**: `get_usage` — returns token counts,
+  estimated cost, and session duration for the current session and
+  historical summaries.
+- Extend the audit log with token count fields per request/response pair.
+
+**Schema sketch:**
+
+```sql
+CREATE TABLE usage_records (
+    id          TEXT PRIMARY KEY,
+    session_id  TEXT NOT NULL,
+    group_name  TEXT NOT NULL,
+    timestamp   TEXT NOT NULL,
+    input_tokens  INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    model       TEXT NOT NULL,
+    estimated_cost_usd REAL NOT NULL,
+    correlation TEXT    -- Links to specific tool invocation
+);
+
+CREATE INDEX idx_usage_session ON usage_records(session_id);
+CREATE INDEX idx_usage_group ON usage_records(group_name);
+CREATE INDEX idx_usage_timestamp ON usage_records(timestamp);
+```
+
+**Intrinsic tool justification:** Usage data is generated by the core
+(not a plugin), requires zero external dependencies, needs zero user
+configuration, and a plugin handler wrapper adds zero value. It passes
+all four intrinsic criteria.
+
+**Source:**
+OpenClaw tracks per-session and per-response token counts and cost
+metrics, surfaced via the `/status` in-chat command.
+([GitHub README](https://github.com/openclaw/openclaw))
+
+---
+
+### 1.3 Browser Automation Plugin
+
+**What it is:** A plugin that provides the agent with tools for controlling
+a headless Chrome/Chromium instance — navigating pages, filling forms,
+clicking elements, taking screenshots, and extracting structured data
+from web pages.
+
+**Why it matters:** Browser automation is one of the most powerful
+capability categories for a personal assistant. It unlocks web research,
+form automation (insurance claims, government portals, expense reports),
+price comparison, data extraction, and monitoring of web-based dashboards.
+Without it, any web-based task requires the user to do it manually.
+
+**Carapace integration:**
+
+- Implement as a **plugin** (`plugins/browser/`).
+- Host-side handler manages a Chrome DevTools Protocol (CDP) connection
+  to a headless Chromium instance running on the host.
+- Container-side skill teaches the agent available browser tools.
+- The browser instance runs on the **host** (not in the agent container),
+  maintaining the security boundary — the agent requests browser actions
+  via the `ipc` binary, and the handler executes them.
+
+**Proposed tools:**
+
+| Tool | Risk Level | Description |
+|------|-----------|-------------|
+| `browser_navigate` | low | Navigate to a URL |
+| `browser_snapshot` | low | Take a screenshot or extract page content |
+| `browser_click` | low | Click an element by selector |
+| `browser_type` | low | Type text into a form field |
+| `browser_execute` | high | Execute arbitrary JavaScript on page |
+| `browser_upload` | high | Upload a file to a form field |
+
+**Security considerations:**
+
+- `browser_execute` and `browser_upload` are `risk_level: "high"` —
+  require user confirmation before execution.
+- The browser profile should be isolated (no access to user's main
+  browser cookies or sessions).
+- Consider a credential-injection pattern: the handler can fill login
+  forms using credentials from the host credential store, without
+  exposing credentials to the agent. The agent says "log in to GitHub"
+  and the handler fills the credentials — the agent never sees the
+  password.
+- Max concurrent pages limit to prevent resource exhaustion.
+- Navigation restricted to allowlisted domains (optional, configurable).
+
+**Source:**
+OpenClaw bundles a dedicated Chrome/Chromium instance with full CDP
+control, including snapshots, actions, uploads, and profile management.
+([GitHub README](https://github.com/openclaw/openclaw))
+
+---
+
+### 1.4 Persistent Directives
+
+**What it is:** Standing instructions that survive across sessions. The
+agent can create, modify, and delete directives that remain active until
+explicitly cancelled. Directives are evaluated at the start of each
+session and can be triggered by conditions, schedules, or events.
+
+**Why it matters:** This transforms the agent from purely reactive (waits
+for user input) to proactive (monitors conditions and acts autonomously).
+Examples: "Check this job listing URL every morning and alert me if new
+postings match my criteria," "Watch my email for shipping notifications
+and update my travel spreadsheet," "Remind me every Friday to review my
+weekly goals."
+
+**Carapace integration:**
+
+- Implement as a **plugin** (`plugins/directives/`).
+- Directives stored in host-side SQLite (same pattern as memory):
+  `data/directives/{group}.sqlite`.
+- The plugin subscribes to `agent.started` events to inject active
+  directives into new sessions via a brief-like mechanism.
+- For time-based directives, the plugin registers `task.created` events
+  that the core's task scheduler triggers on schedule.
+- For condition-based directives (file changes, URL monitoring), the
+  host-side handler runs lightweight polling loops and publishes
+  `task.triggered` events when conditions are met.
+
+**Proposed tools:**
+
+| Tool | Risk Level | Description |
+|------|-----------|-------------|
+| `directive_create` | high | Create a new persistent directive |
+| `directive_list` | low | List active directives |
+| `directive_update` | high | Modify an existing directive |
+| `directive_delete` | high | Cancel a directive |
+| `directive_history` | low | View execution history for a directive |
+
+**Security considerations:**
+
+- All directive CRUD operations are `risk_level: "high"` (except read
+  operations) — the user must approve creation of autonomous behaviors.
+- Directives have a max execution frequency (minimum interval between
+  triggers) to prevent runaway loops.
+- Each directive execution spawns a normal agent session, subject to
+  all standard security controls (container isolation, validation
+  pipeline, rate limits).
+- Directive content is untrusted (same as memory) — it may have been
+  created during a session influenced by prompt injection. Directives
+  are logged to the audit trail for forensic review.
+
+**Relationship to existing `task.triggered`:**
+
+Carapace already has `task.triggered` events in the event bus, but the
+mechanism for *creating* and *managing* scheduled tasks is not documented.
+Persistent directives formalize this: the directives plugin is the
+authoring interface, and `task.triggered` is the execution mechanism.
+
+**Source:**
+OpenClaw supports "persistent directives" — standing instructions that
+the agent monitors and executes autonomously over time, including
+watching folders/conditions and triggering autonomous actions when
+criteria are met.
+([o-mega.ai guide](https://o-mega.ai/articles/openclaw-creating-the-ai-agent-workforce-ultimate-guide-2026),
+[DigitalOcean overview](https://www.digitalocean.com/resources/articles/what-is-openclaw))
+
+---
+
+### 1.5 Secure Remote Access
+
+**What it is:** A mechanism for accessing Carapace from outside the local
+network — enabling messaging the agent from a phone, laptop at a
+coffee shop, or while traveling. Without this, Carapace is limited to
+interactions originating from the machine it runs on (or local network
+messaging channels).
+
+**Why it matters:** A personal assistant that only works when you're at
+your desk is significantly less useful than one you can reach from
+anywhere. This is table stakes for messaging-channel use cases (Telegram,
+Signal, etc. already work remotely, but the user needs the Carapace host
+to be reachable).
+
+**Carapace integration:**
+
+- This is an **infrastructure concern**, not a plugin. It affects how the
+  core's HTTP listener (for webhooks) and ZeroMQ socket are exposed.
+- Recommended approach: **Tailscale integration** — the host joins a
+  tailnet, and the core binds to the Tailscale interface. This provides:
+  - Encrypted WireGuard tunnel with no port forwarding
+  - Identity-based access control (only your devices)
+  - Zero configuration DNS (`carapace.tailnet-name.ts.net`)
+- Alternative: SSH tunnel or WireGuard manual setup for users who don't
+  want Tailscale.
+- The core's default bind address remains `127.0.0.1`. Remote access is
+  opt-in configuration, never default.
+
+**Security considerations:**
+
+- Remote access expands the attack surface significantly. The defense-in
+  -depth model still applies: container isolation is primary, host-side
+  validation is secondary.
+- Tailscale's identity model (device-level authentication via WireGuard
+  keys) aligns with Carapace's single-user design — only the user's
+  devices can reach the agent.
+- If using webhooks over remote access, HMAC authentication on every
+  request is mandatory (see [1.1](#11-inbound-webhook-receiver)).
+- Audit log should record source IP for all remote connections.
+
+**Source:**
+OpenClaw integrates with Tailscale for secure remote access (Tailscale
+Serve for tailnet-only, Tailscale Funnel for public with password auth).
+([GitHub README](https://github.com/openclaw/openclaw))
+
+---
+
+## Tier 2 — Medium Priority
+
+These features add meaningful value but require more architectural
+consideration or are less urgent than Tier 1.
+
+### 2.1 Web Dashboard / Control Plane
+
+**What it is:** A lightweight web interface served from the Carapace host
+that provides operational visibility: active sessions, plugin health
+status, audit log viewer, usage metrics, directive status, and
+configuration management.
+
+**Why it matters:** Currently, Carapace has no user-facing UI — all
+operational data lives in audit logs and SQLite databases. A dashboard
+makes this data accessible without CLI expertise. It's especially
+valuable for monitoring plugin health, reviewing audit logs for security
+events, and tracking usage costs.
+
+**Carapace integration:**
+
+- Implement as a **core feature** (thin HTTP server) or as a special
+  **plugin** that subscribes to all events.
+- Read-only by default — the dashboard displays data, it doesn't modify
+  state. Configuration changes should still require CLI or file edits
+  (prevents the dashboard from becoming an attack surface).
+- Serve on `127.0.0.1:18080` by default (localhost only). Remote access
+  via Tailscale (see [1.5](#15-secure-remote-access)).
+- Built with minimal dependencies — a single static HTML/JS bundle
+  served by the core's HTTP handler. No React, no build pipeline.
+
+**Proposed views:**
+
+| View | Data Source | Purpose |
+|------|-----------|---------|
+| Session Monitor | Core session state | Active/recent sessions, duration, status |
+| Plugin Health | Startup state + heartbeats | Which plugins loaded, which failed |
+| Audit Log | `data/audit/` | Searchable, filterable event log |
+| Usage Dashboard | `data/usage/` | Token counts, costs, trends over time |
+| Directives | `data/directives/` | Active directives, execution history |
+| Memory Browser | `data/memory/` | Browse/search memory entries |
+
+**Security considerations:**
+
+- Dashboard is read-only. No mutation endpoints.
+- If served over Tailscale, authentication is handled by the tailnet.
+- If exposed locally, consider optional basic auth for multi-user
+  machines.
+- Dashboard never displays raw credentials, API keys, or secrets.
+  The response sanitization pipeline applies to dashboard data too.
+
+**Source:**
+OpenClaw ships a web dashboard served from the gateway (no external
+dependency), a WebChat interface, and a macOS menu bar app for session
+monitoring, debug tools, and remote gateway control.
+([GitHub README](https://github.com/openclaw/openclaw))
+
+---
+
+### 2.2 Agent-to-Agent Communication
+
+**What it is:** The ability for multiple concurrent Carapace agent sessions
+to discover each other, exchange messages, and coordinate work. One agent
+can delegate subtasks to another, share findings, or request information
+from a specialized agent.
+
+**Why it matters:** Complex tasks benefit from decomposition. A research
+agent could gather information while a writing agent drafts a document.
+A monitoring agent could alert a response agent when conditions change.
+Single-agent-at-a-time limits Carapace to sequential workflows.
+
+**Carapace integration:**
+
+- Requires **core changes** to support multiple concurrent sessions
+  within a group.
+- Add session discovery: each running session has a session ID, group,
+  and creation timestamp visible to other sessions in the same group.
+- Add cross-session messaging: a new topic `session.message.{target_id}`
+  routed by the core to the target session's DEALER socket.
+- The core constructs the envelope — sessions cannot spoof their source
+  identity (same principle as the existing wire protocol).
+
+**Proposed tools (core intrinsic):**
+
+| Tool | Risk Level | Description |
+|------|-----------|-------------|
+| `sessions_list` | low | Discover active sessions in this group |
+| `sessions_send` | low | Send a message to another session |
+| `sessions_receive` | low | Check for incoming messages |
+
+**Security considerations:**
+
+- Sessions can only communicate within the same group. Cross-group
+  messaging is not supported (same isolation principle as memory).
+- The core validates that the target session exists and belongs to the
+  same group.
+- Rate limit on cross-session messages to prevent message flooding.
+- Each session still runs in its own container — agent-to-agent
+  communication doesn't weaken container isolation.
+
+**Source:**
+OpenClaw supports cross-session messaging via `sessions_list`,
+`sessions_history`, and `sessions_send` tools, enabling multi-agent
+routing and coordination.
+([GitHub README](https://github.com/openclaw/openclaw))
+
+---
+
+### 2.3 Model Failover and Multi-Model Routing
+
+**What it is:** The ability to configure multiple LLM backends and
+automatically fail over between them when one is unavailable. Optionally,
+route different types of tasks to different models (cheap/fast model for
+simple queries, strong/expensive model for complex reasoning).
+
+**Why it matters:** API outages happen. If Claude is down and Carapace
+can only use Claude, the agent is completely non-functional. Model
+failover provides resilience. Multi-model routing provides cost
+optimization — not every agent task needs the most expensive model.
+
+**Carapace integration:**
+
+- Requires **core changes** to the container lifecycle manager.
+  Currently, the container runs Claude Code, which implies a single
+  model provider. Supporting model failover requires either:
+  - **Option A:** Multiple container images (one per model provider),
+    with the core selecting which to launch. Heavy, but maintains
+    container isolation per provider.
+  - **Option B:** A model proxy that sits between the container and
+    model APIs, handling failover transparently. Lighter, but adds
+    a component.
+- Model selection could be configured per-group or per-event-type.
+
+**Configuration example:**
+
+```json
+{
+  "models": {
+    "primary": {
+      "provider": "anthropic",
+      "model": "claude-opus-4-6",
+      "api_key_ref": "anthropic_key"
+    },
+    "fallback": {
+      "provider": "openai",
+      "model": "gpt-4o",
+      "api_key_ref": "openai_key"
+    },
+    "routing": {
+      "default": "primary",
+      "on_failure": "fallback",
+      "simple_tasks": "fallback"
+    }
+  }
+}
+```
+
+**Security considerations:**
+
+- API keys for all providers stored in host credential store.
+- Failover logic runs on the host (core), not in the container.
+- Different models have different prompt injection resistance profiles.
+  The security model should not assume all models are equally resistant.
+- The agent's CLAUDE.md instructions may be Claude-specific. Model
+  failover requires provider-agnostic prompt engineering or
+  per-provider prompt templates.
+
+**Source:**
+OpenClaw supports model failover between authentication profiles and
+multiple model providers (Anthropic Claude, OpenAI GPT, DeepSeek).
+([GitHub README](https://github.com/openclaw/openclaw),
+[DigitalOcean overview](https://www.digitalocean.com/resources/articles/what-is-openclaw))
+
+---
+
+### 2.4 In-Chat Session Controls
+
+**What it is:** User-facing commands available within messaging channels
+that control the current agent session without leaving the conversation.
+Commands like `/status`, `/reset`, `/compact`, and `/usage` give users
+real-time control over session behavior.
+
+**Why it matters:** When interacting with the agent via Telegram, Signal,
+or other messaging channels, the user needs a way to manage the session
+without accessing the host machine. These commands are especially
+important for mobile interactions where the user can't open a terminal.
+
+**Carapace integration:**
+
+- Implement in **channel plugins** (Telegram, Signal, etc.), not in the
+  core. Each channel plugin intercepts messages starting with `/` and
+  handles them locally instead of forwarding to the agent.
+- Some commands require core data (session status, usage metrics). The
+  channel plugin requests this via the existing tool invocation path
+  (calling `get_session_info`, `get_usage`, etc.).
+- Commands are channel-local — the agent never sees them. This prevents
+  prompt injection via command syntax.
+
+**Proposed commands:**
+
+| Command | Description | Data Source |
+|---------|-----------|-------------|
+| `/status` | Show model, session duration, token count | `get_session_info` + `get_usage` |
+| `/reset` | Clear conversation context, start fresh | Core session reset |
+| `/usage` | Show token counts and estimated cost | `get_usage` |
+| `/compact` | Summarize and compress context window | Agent-side context management |
+| `/cancel` | Abort current agent operation | Core session cancellation |
+| `/help` | List available commands | Channel plugin local |
+
+**Security considerations:**
+
+- Commands are intercepted by the channel plugin before reaching the
+  agent — they cannot be forged via prompt injection.
+- `/reset` and `/cancel` are destructive operations — consider requiring
+  confirmation in the channel before executing.
+- `/compact` sends a meta-instruction to the agent. The agent still
+  operates within its normal security boundaries.
+
+**Source:**
+OpenClaw exposes `/status`, `/new`, `/reset`, `/compact`, `/think`,
+`/verbose`, `/usage`, `/restart`, and `/activation` as in-chat commands
+across WhatsApp, Telegram, Slack, and other channels.
+([GitHub README](https://github.com/openclaw/openclaw))
+
+---
+
+### 2.5 Configuration Health Check (`carapace doctor`)
+
+**What it is:** A pre-flight diagnostic command that validates the
+Carapace installation, plugin manifests, security configuration,
+container runtime, and connectivity before starting the system. Reports
+warnings and errors with actionable remediation steps.
+
+**Why it matters:** Misconfiguration is a common source of both
+operational failures and security vulnerabilities. A diagnostic command
+catches problems before they manifest at runtime — missing container
+runtime, invalid plugin manifests, overly permissive access policies,
+missing credentials, stale sockets.
+
+**Carapace integration:**
+
+- Implement as a **CLI command**: `carapace doctor`.
+- Runs outside the normal startup path — it checks prerequisites
+  without starting the core.
+- Exits with a non-zero status code if any errors (not just warnings)
+  are found.
+
+**Proposed checks:**
+
+| Check | Severity | Description |
+|-------|---------|-------------|
+| Container runtime | error | Docker/Podman available and responsive |
+| ZeroMQ socket path | error | Socket directory exists and is writable |
+| Plugin manifests | error | All manifests parse, no tool name collisions |
+| Plugin dependencies | warning | External services reachable (APIs, DBs) |
+| Security config | warning | No overly permissive group policies |
+| Credential store | warning | Referenced credentials exist |
+| Disk space | warning | Sufficient space for audit logs and data |
+| Port availability | error | Webhook/dashboard ports not in use |
+| Container image | error | Required image exists and is pullable |
+| Socket cleanup | warning | No stale socket files from crashed sessions |
+
+**Source:**
+OpenClaw provides `openclaw doctor` which surfaces risky or misconfigured
+DM policies, missing permissions, and configuration issues.
+([GitHub README](https://github.com/openclaw/openclaw))
+
+---
+
+## Tier 3 — Future Exploration
+
+These features are valuable but represent significant scope expansion.
+They should be evaluated after Tier 1 and Tier 2 are stable.
+
+### 3.1 Voice Interface / Speech Pipeline
+
+**What it is:** Audio input and output capabilities — speech-to-text for
+user commands, text-to-speech for agent responses, and optional always-on
+voice activation ("wake word" detection).
+
+**Why it matters:** Voice is the most natural interaction modality for
+hands-free scenarios: cooking, driving, exercising, or simply walking
+around the house. A personal assistant that can only be typed to is
+significantly less accessible than one that can be spoken to.
+
+**Carapace integration considerations:**
+
+- Audio processing must happen on the **host** (not in the container).
+  The agent container has no microphone access, no audio hardware
+  access, and no network access for cloud STT/TTS APIs.
+- Architecture: a **voice plugin** that captures audio on the host,
+  transcribes it (locally or via API), and publishes `message.inbound`
+  events with the transcript. Agent responses are synthesized to
+  audio on the host side.
+- Wake word detection requires an always-on audio pipeline — this is
+  a significant resource commitment. Consider making it optional
+  (push-to-talk as the simpler alternative).
+
+**Components:**
+
+| Component | Runs On | Technology Options |
+|-----------|---------|-------------------|
+| Wake word detection | Host | Porcupine, Snowboy, or built-in OS |
+| Speech-to-text | Host or API | Whisper (local), Deepgram, Google STT |
+| Text-to-speech | Host or API | ElevenLabs, Coqui TTS, macOS `say` |
+| Audio capture | Host | PortAudio, macOS Core Audio |
+| Audio playback | Host | System audio output |
+
+**Security considerations:**
+
+- Always-on microphone is a significant privacy concern. Must be
+  clearly opt-in with visible indicator (LED, menu bar icon) when
+  listening.
+- Audio data should not be stored persistently by default. Transcripts
+  can be logged in the audit trail, but raw audio should be ephemeral.
+- Cloud STT/TTS services introduce a third-party data processor.
+  Local models (Whisper) avoid this at the cost of compute resources.
+
+**Source:**
+OpenClaw features Voice Wake (always-on speech activation), Talk Mode
+(continuous conversation with speech synthesis), Push-to-Talk, and an
+audio pipeline with transcription hooks. Uses ElevenLabs for synthesis.
+([GitHub README](https://github.com/openclaw/openclaw))
+
+---
+
+### 3.2 Multi-Device Node System
+
+**What it is:** Companion runtimes on iOS, Android, and additional macOS
+machines that pair with the Carapace host and advertise device-specific
+capabilities (camera, GPS location, push notifications, screen recording,
+clipboard). The agent can invoke device capabilities remotely.
+
+**Why it matters:** A personal assistant constrained to a single machine
+cannot take a photo, check your location, send a push notification to
+your phone, or access your phone's clipboard. Device nodes extend the
+agent's sensory and interaction capabilities to wherever you are.
+
+**Carapace integration considerations:**
+
+- Requires a **pairing protocol** — devices discover and authenticate
+  with the host over the local network (mDNS/Bonjour) or via Tailscale.
+- Each node advertises capabilities via a manifest (similar to plugin
+  manifests). The core aggregates node capabilities into the tool
+  catalog.
+- Node communication uses the same ZeroMQ patterns but over TCP
+  (not Unix socket) with TLS.
+- Each node tool invocation routes through the core's validation
+  pipeline — the agent can't bypass security by talking to a node
+  directly.
+
+**Proposed node capabilities:**
+
+| Capability | Platform | Description |
+|-----------|---------|-------------|
+| `node_camera` | iOS, Android | Take a photo or short video |
+| `node_location` | iOS, Android | Get current GPS coordinates |
+| `node_notify` | iOS, Android, macOS | Send a push notification |
+| `node_clipboard` | iOS, Android, macOS | Read/write system clipboard |
+| `node_screenshot` | macOS | Capture screen content |
+| `node_haptic` | iOS, Android | Vibrate the device |
+
+**Security considerations:**
+
+- Every node capability is a `risk_level: "high"` tool — camera,
+  location, and clipboard access all require user confirmation.
+- Pairing must use a code-based approval flow (node displays code,
+  user enters it on host) to prevent unauthorized device pairing.
+- Node communication must be encrypted (TLS over Tailscale or
+  certificate pinning over local network).
+- If a node disconnects, its capabilities are immediately removed from
+  the tool catalog. No stale device capabilities.
+
+**Source:**
+OpenClaw's node system pairs macOS, iOS, and Android devices via Bonjour,
+advertising capabilities (camera, screen, location, notifications) that
+execute device-locally via `node.invoke`.
+([GitHub README](https://github.com/openclaw/openclaw))
+
+---
+
+### 3.3 Canvas / Visual Workspace
+
+**What it is:** An agent-driven visual workspace where the agent can push
+rich content (HTML, diagrams, charts, interactive widgets) for the user
+to view. Goes beyond plain text responses to provide visual dashboards,
+data tables, Mermaid diagrams, and interactive forms.
+
+**Why it matters:** Some information is best consumed visually — data
+dashboards, comparison tables, flowcharts, architectural diagrams.
+Currently Carapace can only produce text output via messaging channels.
+A visual workspace provides a richer output modality.
+
+**Carapace integration considerations:**
+
+- Implement as a **plugin** that serves a local web page and provides
+  tools for the agent to push content to it.
+- The web page is served on the host (same HTTP server as the
+  dashboard, see [2.1](#21-web-dashboard--control-plane)).
+- Agent pushes content via tools (`canvas_push`, `canvas_clear`).
+  The host-side handler renders it in the web interface via WebSocket.
+- Content is sandboxed — agent-generated HTML runs in a sandboxed
+  iframe with no access to the host page or network.
+
+**Proposed tools:**
+
+| Tool | Risk Level | Description |
+|------|-----------|-------------|
+| `canvas_push` | low | Push HTML/Markdown content to the workspace |
+| `canvas_clear` | low | Clear the workspace |
+| `canvas_snapshot` | low | Capture workspace as image |
+
+**Source:**
+OpenClaw's Canvas / A2UI provides an agent-driven visual workspace with
+push/reset, eval, and snapshot capabilities.
+([GitHub README](https://github.com/openclaw/openclaw))
+
+---
+
+### 3.4 Presence and Typing Indicators
+
+**What it is:** Real-time status indicators in messaging channels showing
+when the agent is active, processing a request, or idle. Typing
+indicators show when the agent is generating a response.
+
+**Why it matters:** Without feedback, the user doesn't know if their
+message was received, if the agent is working on it, or if something
+went wrong. Presence and typing indicators are standard UX in messaging
+apps and make the agent feel responsive.
+
+**Carapace integration:**
+
+- Implement in **channel plugins** using each platform's native
+  presence/typing APIs (Telegram `sendChatAction`, Signal typing
+  indicators, etc.).
+- The core publishes `agent.started`, `agent.completed`, and
+  `agent.error` events. Channel plugins subscribe to these and
+  translate them into platform-specific presence updates.
+- Typing indicators are sent when the agent begins generating a
+  response and cleared when the response is sent.
+
+**Source:**
+OpenClaw surfaces real-time typing status and agent presence indicators
+across all messaging channels.
+([GitHub README](https://github.com/openclaw/openclaw))
+
+---
+
+### 3.5 Serverless / On-Demand Execution Mode
+
+**What it is:** An alternative deployment mode where Carapace runs
+on-demand rather than as an always-on daemon. The system spins up in
+response to incoming triggers (webhook, scheduled task) and shuts down
+when idle. Targets serverless platforms (Cloudflare Workers, AWS Lambda)
+or local on-demand execution.
+
+**Why it matters:** An always-on host consumes resources even when idle.
+For users with low-traffic personal assistants (a few interactions per
+day), on-demand execution could significantly reduce infrastructure
+cost and power consumption.
+
+**Carapace integration considerations:**
+
+- Significant architectural change. The current design assumes
+  a persistent host process managing ZeroMQ sockets, plugin handlers,
+  and container lifecycle.
+- Serverless mode would require:
+  - Cold-start optimization (plugin initialization, container spin-up)
+  - State externalization (audit logs, memory, directives can't live
+    on an ephemeral filesystem)
+  - Queue-based event ingestion (replacing the PUB/SUB bus)
+- This is likely a v2 or v3 feature. The current architecture should
+  not be compromised to accommodate it — better to design a separate
+  deployment adapter.
+
+**Source:**
+OpenClaw offers a "Moltworker" approach using Cloudflare Workers for
+zero-cost-idle serverless execution.
+([o-mega.ai guide](https://o-mega.ai/articles/openclaw-creating-the-ai-agent-workforce-ultimate-guide-2026))
+
+---
+
+## Explicitly Out of Scope
+
+These OpenClaw features were evaluated and intentionally excluded from
+Carapace's roadmap. They conflict with Carapace's design philosophy
+or are not appropriate for a single-user personal assistant.
+
+### Skill Marketplace / Registry
+
+OpenClaw's [ClawHub](https://github.com/openclaw/openclaw) provides a
+skill marketplace with auto-discovery, installation gating, and
+community-shared skills. Carapace uses local filesystem discovery
+(`plugins/` directory) by design — no registry, no marketplace, no
+versioning conflicts. Plugins never depend on each other, only on the
+app version. This is a conscious architectural decision that prioritizes
+simplicity and security over ecosystem breadth.
+
+### Multi-User / Multi-Tenant Support
+
+OpenClaw supports multi-user deployments with OAuth-scoped marketplace
+plugins and admin approval workflows. Carapace is a single-user personal
+assistant by design. Multi-tenancy introduces significant complexity
+(user isolation, shared resource management, access control) that is
+not justified for the target use case.
+
+### Agent Social Network
+
+OpenClaw's [Moltbook](https://github.com/openclaw/openclaw) allows
+agents to autonomously post, comment, and interact on a social platform
+(30,000+ agents in the first days). This is outside Carapace's scope as
+a personal assistant framework.
+
+### Self-Authoring Skills / Autonomous Skill Creation
+
+OpenClaw allows the agent to autonomously write code to create new
+skills. Carapace keeps plugin authoring with the user — the agent
+operates within the tools it's given, and cannot create new tools for
+itself. This is a security-conscious decision: an agent that can author
+its own tools can potentially escalate its own capabilities beyond what
+the user intended.
+
+---
+
+## References
+
+- [OpenClaw GitHub Repository](https://github.com/openclaw/openclaw)
+  — Primary source for architecture, features, and plugin SDK
+- [What is OpenClaw? | DigitalOcean](https://www.digitalocean.com/resources/articles/what-is-openclaw)
+  — Feature overview, deployment options, integration details
+- [OpenClaw: AI Agent Workforce Guide | o-mega.ai](https://o-mega.ai/articles/openclaw-creating-the-ai-agent-workforce-ultimate-guide-2026)
+  — Multi-agent orchestration, skill system, deployment patterns
+- [OpenClaw Wikipedia](https://en.wikipedia.org/wiki/OpenClaw)
+  — Project history and community adoption metrics
+- [What Security Teams Need to Know About OpenClaw | CrowdStrike](https://www.crowdstrike.com/en-us/blog/what-security-teams-need-to-know-about-openclaw-ai-super-agent/)
+  — Security analysis and permission model concerns
+- [OpenClaw Review 2026 | CyberNews](https://cybernews.com/ai-tools/openclaw-review/)
+  — Independent review and feature evaluation
