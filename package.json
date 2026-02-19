@@ -42,5 +42,11 @@
     "better-sqlite3": "^11.7.0",
     "zeromq": "^6.4.0"
   },
-  "packageManager": "pnpm@10.28.0"
+  "packageManager": "pnpm@10.28.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  }
 }
