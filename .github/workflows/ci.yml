@@ -45,14 +45,28 @@ jobs:
       - run: nix develop --command pnpm run type-check
 
   audit:
-    name: Audit
+    name: Dependency Audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
-      - run: nix develop --command pnpm install --frozen-lockfile
-      - run: nix develop --command pnpm audit --audit-level=high || true
+      - name: Install dependencies (verify lockfile integrity)
+        run: nix develop --command pnpm install --frozen-lockfile
+      - name: Audit dependencies (block on high/critical)
+        run: nix develop --command pnpm audit --audit-level=high
+
+  secret-scanning:
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ---------------------------------------------------------------------------
   # Stage 2: Unit tests + coverage
