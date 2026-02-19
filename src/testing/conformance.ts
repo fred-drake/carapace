@@ -21,7 +21,9 @@ import { join, basename, resolve } from 'node:path';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 
 import _Ajv from 'ajv';
-const Ajv = (_Ajv as unknown as { default?: typeof _Ajv }).default ?? _Ajv;
+// ajv ESM interop: CJS default export may be wrapped in { default: ... }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const Ajv: new (opts?: any) => any = (_Ajv as any).default ?? _Ajv;
 
 import { MANIFEST_JSON_SCHEMA } from '../types/manifest-schema.js';
 import { SchemaValidator } from '../core/schema-validator.js';
@@ -216,7 +218,11 @@ export function describePluginConformance(options: ConformanceOptions): void {
         const valid = validate(JSON.parse(rawManifest));
 
         if (!valid) {
-          const errors = validate.errors?.map((e) => `${e.instancePath} ${e.message}`).join('; ');
+          const errors = validate.errors
+            ?.map(
+              (e: { instancePath: string; message?: string }) => `${e.instancePath} ${e.message}`,
+            )
+            .join('; ');
           expect.fail(`Manifest schema validation failed: ${errors}`);
         }
       });

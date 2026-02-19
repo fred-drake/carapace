@@ -263,7 +263,10 @@ export class PodmanRuntime implements ContainerRuntime {
 // ---------------------------------------------------------------------------
 
 const defaultExec: ExecFn = async (file, args) => {
-  const result = await execFileAsync(file, [...args]);
+  const result = (await execFileAsync(file, [...args])) as {
+    stdout: string | Buffer;
+    stderr: string | Buffer;
+  };
   return {
     stdout: typeof result.stdout === 'string' ? result.stdout : result.stdout.toString(),
     stderr: typeof result.stderr === 'string' ? result.stderr : result.stderr.toString(),

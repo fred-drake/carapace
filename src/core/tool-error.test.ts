@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ToolError, isToolError } from './tool-error.js';
 import { ErrorCode, ERROR_RETRIABLE_DEFAULTS } from '../types/errors.js';
+import type { ErrorPayload } from '../types/errors.js';
 
 // ---------------------------------------------------------------------------
 // Construction

@@ -14,8 +14,9 @@
  */
 
 import _Ajv from 'ajv';
-// ajv ESM interop: default export is the constructor
-const Ajv = (_Ajv as { default?: typeof _Ajv }).default ?? _Ajv;
+// ajv ESM interop: CJS default export may be wrapped in { default: ... }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const Ajv: new (opts?: any) => any = (_Ajv as any).default ?? _Ajv;
 import { MANIFEST_JSON_SCHEMA } from './types/manifest-schema.js';
 
 // ---------------------------------------------------------------------------

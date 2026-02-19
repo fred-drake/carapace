@@ -193,6 +193,7 @@ describe('executeHandler', () => {
       const handler = makeHandler(async () => {
         const obj: Record<string, unknown> = {};
         (obj.foo as () => void)();
+        return { ok: true as const, result: {} };
       });
 
       const response = await executeHandler(handler, 'test_tool', {}, makeContext());
