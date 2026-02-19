@@ -77,12 +77,18 @@ jobs:
   #   runs-on: ubuntu-latest
 
   # ---------------------------------------------------------------------------
-  # Stage 4: Security tests (future — SEC-01)
+  # Stage 4: SAST — custom Semgrep rules (SEC-14)
   # ---------------------------------------------------------------------------
-  # security:
-  #   name: Security Tests
-  #   needs: [test]
-  #   runs-on: ubuntu-latest
+  sast:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    needs: [lint, format, type-check]
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Semgrep with custom rules
+        run: semgrep scan --config .semgrep/carapace-rules.yml --error src/
 
   # ---------------------------------------------------------------------------
   # Stage 5: Container build + Trivy scan + smoke test (DEVOPS-08)
