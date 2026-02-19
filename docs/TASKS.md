@@ -93,8 +93,9 @@ matched by correlation ID. Requests to unknown topics return error responses. Mu
 concurrent requests are handled correctly.
 **Complexity**: L
 
-### ENG-03: Implement core message router
+### ~~ENG-03: Implement core message router~~ DONE
 
+**Status**: Completed (PR #18, merged 2026-02-18)
 **Role**: Engineer
 **Description**: Build the central router that receives messages from both channels,
 constructs full envelopes from wire messages (adding id, version, type, source, group,
@@ -112,8 +113,9 @@ appropriate error codes. Router does not crash on malformed input. Each of the 6
 pipeline stages is independently testable.
 **Complexity**: L
 
-### ENG-04: Implement plugin loader
+### ~~ENG-04: Implement plugin loader~~ DONE
 
+**Status**: Completed (PR #19, merged 2026-02-18)
 **Role**: Engineer
 **Description**: Build the filesystem-based plugin discovery and loading system. Scan
 `plugins/` directory at startup, parse and validate each manifest.json, instantiate
@@ -190,8 +192,9 @@ without Docker. Mock can simulate spawn failures, timeout, and crash scenarios.
 Cleanup verification confirms no leaked resources.
 **Complexity**: M
 
-### QA-10: Build IPC binary test harness
+### ~~QA-10: Build IPC binary test harness~~ DONE
 
+**Status**: Completed (PR #17, merged 2026-02-18)
 **Role**: QA
 **Description**: Create a test harness specifically for the `ipc` binary (ENG-05). The
 binary is the container's sole communication channel — it must be thoroughly tested.
