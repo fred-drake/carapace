@@ -87,8 +87,10 @@ export interface ContainerRunOptions {
   name?: string;
   /** Mount the root filesystem as read-only. */
   readOnly: boolean;
-  /** Disable all network access inside the container. */
+  /** Disable all network access inside the container. Ignored when `network` is set. */
   networkDisabled: boolean;
+  /** Connect the container to a named Docker/Podman network. Overrides `networkDisabled`. */
+  network?: string;
   /** Filesystem bind mounts. */
   volumes: VolumeMount[];
   /** Unix domain socket mounts (first-class for Apple Container vsock). */

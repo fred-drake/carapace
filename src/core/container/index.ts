@@ -19,6 +19,13 @@ export { PodmanRuntime, type PodmanRuntimeOptions } from './podman-runtime.js';
 export { MockContainerRuntime } from './mock-runtime.js';
 
 export {
+  NetworkAllowlist,
+  DEFAULT_ALLOWLIST,
+  type AllowlistEntry,
+  type NetworkAllowlistOptions,
+} from './network-allowlist.js';
+
+export {
   ContainerLifecycleManager,
   type LifecycleManagerOptions,
   type SpawnRequest,

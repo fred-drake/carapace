@@ -174,6 +174,51 @@ describe('parseConfig', () => {
   it('rejects non-string entries in plugins.dirs', () => {
     expect(() => parseConfig({ plugins: { dirs: [123 as unknown] } })).toThrow(/dirs.*string/i);
   });
+
+  it('parses network section with allowed_hosts', () => {
+    const result = parseConfig({
+      network: {
+        allowed_hosts: [
+          { hostname: 'api.anthropic.com', port: 443 },
+          { hostname: 'custom.api.com', port: 8443 },
+        ],
+      },
+    });
+    expect(result.network.allowed_hosts).toHaveLength(2);
+    expect(result.network.allowed_hosts![0].hostname).toBe('api.anthropic.com');
+    expect(result.network.allowed_hosts![1].port).toBe(8443);
+  });
+
+  it('uses default empty allowed_hosts when network section is absent', () => {
+    const result = parseConfig({});
+    expect(result.network.allowed_hosts).toBeUndefined();
+  });
+
+  it('rejects non-array network.allowed_hosts', () => {
+    expect(() => parseConfig({ network: { allowed_hosts: 'not-an-array' as unknown } })).toThrow(
+      /allowed_hosts.*array/i,
+    );
+  });
+
+  it('rejects allowed_hosts entries without hostname', () => {
+    expect(() => parseConfig({ network: { allowed_hosts: [{ port: 443 }] } })).toThrow(
+      /hostname.*string/i,
+    );
+  });
+
+  it('rejects allowed_hosts entries without port', () => {
+    expect(() =>
+      parseConfig({ network: { allowed_hosts: [{ hostname: 'example.com' }] } }),
+    ).toThrow(/port.*number/i);
+  });
+
+  it('rejects allowed_hosts entries with invalid port', () => {
+    expect(() =>
+      parseConfig({
+        network: { allowed_hosts: [{ hostname: 'example.com', port: -1 }] },
+      }),
+    ).toThrow(/port.*1.*65535/i);
+  });
 });
 
 // ---------------------------------------------------------------------------
