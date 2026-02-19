@@ -44,3 +44,18 @@ export {
   type DealerSocket,
   type SocketFactory,
 } from './socket.js';
+
+export {
+  type ContainerEngine,
+  type RuntimeConfig,
+  type PluginsConfig,
+  type SecurityConfig,
+  type HelloConfig,
+  type CarapaceConfig,
+  type DirectoryStructure,
+  DEFAULT_CONFIG,
+  CARAPACE_SUBDIRS,
+  resolveHome,
+  ensureDirectoryStructure,
+  parseConfig,
+} from './config.js';
