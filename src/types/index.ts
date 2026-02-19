@@ -22,3 +22,14 @@ export {
   ERROR_RETRIABLE_DEFAULTS,
   RESERVED_PIPELINE_CODES,
 } from './errors.js';
+
+export {
+  type RiskLevel,
+  type Author,
+  type JsonSchemaProperty,
+  type JsonSchema,
+  type ToolDeclaration,
+  type PluginManifest,
+} from './manifest.js';
+
+export { MANIFEST_JSON_SCHEMA } from './manifest-schema.js';
