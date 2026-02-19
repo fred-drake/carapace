@@ -71,6 +71,13 @@ export interface PluginManifest {
     tools: ToolDeclaration[];
   };
   subscribes: string[];
+  /**
+   * Optional list of groups this plugin is authorized for.
+   * When present, the plugin's tools are only available to sessions
+   * belonging to one of the listed groups. When absent, the plugin
+   * is unrestricted (available to all groups).
+   */
+  allowed_groups?: string[];
   config_schema?: {
     type: string;
     required?: string[];
