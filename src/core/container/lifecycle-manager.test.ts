@@ -72,6 +72,31 @@ describe('ContainerLifecycleManager', () => {
       expect(callOptions.networkDisabled).toBe(true);
     });
 
+    it('uses a custom network when networkName is configured', async () => {
+      const netManager = new ContainerLifecycleManager({
+        runtime,
+        sessionManager,
+        networkName: 'carapace-restricted',
+      });
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await netManager.spawn(defaultSpawnRequest());
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.network).toBe('carapace-restricted');
+      expect(callOptions.networkDisabled).toBe(false);
+    });
+
+    it('defaults to networkDisabled when no networkName is configured', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(defaultSpawnRequest());
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.network).toBeUndefined();
+      expect(callOptions.networkDisabled).toBe(true);
+    });
+
     it('mounts the ZeroMQ socket into the container', async () => {
       const runSpy = vi.spyOn(runtime, 'run');
 

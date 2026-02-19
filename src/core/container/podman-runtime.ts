@@ -217,7 +217,9 @@ export class PodmanRuntime implements ContainerRuntime {
       args.push('--read-only');
     }
 
-    if (options.networkDisabled) {
+    if (options.network) {
+      args.push('--network', options.network);
+    } else if (options.networkDisabled) {
       args.push('--network', 'none');
     }
 

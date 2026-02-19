@@ -48,6 +48,17 @@ export interface HelloConfig {
   enabled: boolean;
 }
 
+/** A single allowed host entry in the network allowlist. */
+export interface AllowedHost {
+  hostname: string;
+  port: number;
+}
+
+/** `[network]` section of config.toml. */
+export interface NetworkConfig {
+  allowed_hosts?: AllowedHost[];
+}
+
 // ---------------------------------------------------------------------------
 // Top-level config
 // ---------------------------------------------------------------------------
@@ -64,6 +75,7 @@ export interface CarapaceConfig {
   plugins: PluginsConfig;
   security: SecurityConfig;
   hello: HelloConfig;
+  network: NetworkConfig;
   [section: string]: unknown;
 }
 
@@ -77,6 +89,7 @@ export const DEFAULT_CONFIG: CarapaceConfig = {
   plugins: { dirs: [] },
   security: { max_sessions_per_group: 3 },
   hello: { enabled: true },
+  network: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -222,7 +235,7 @@ export function parseConfig(raw: Record<string, unknown>): CarapaceConfig {
 
   // Copy unknown sections first (extensibility)
   for (const key of Object.keys(raw)) {
-    if (!['runtime', 'plugins', 'security', 'hello'].includes(key)) {
+    if (!['runtime', 'plugins', 'security', 'hello', 'network'].includes(key)) {
       result[key] = raw[key];
     }
   }
@@ -270,6 +283,31 @@ export function parseConfig(raw: Record<string, unknown>): CarapaceConfig {
   const rawHello = (raw['hello'] ?? {}) as Record<string, unknown>;
   const enabled = (rawHello['enabled'] as boolean | undefined) ?? DEFAULT_CONFIG.hello.enabled;
   result['hello'] = { enabled };
+
+  // --- network ---
+  const rawNetwork = (raw['network'] ?? {}) as Record<string, unknown>;
+  const networkConfig: NetworkConfig = {};
+  if (rawNetwork['allowed_hosts'] !== undefined) {
+    const hosts = rawNetwork['allowed_hosts'];
+    if (!Array.isArray(hosts)) {
+      throw new Error('network.allowed_hosts must be an array');
+    }
+    for (const entry of hosts) {
+      const obj = entry as Record<string, unknown>;
+      if (typeof obj['hostname'] !== 'string') {
+        throw new Error('network.allowed_hosts entries must have a hostname string');
+      }
+      if (typeof obj['port'] !== 'number') {
+        throw new Error('network.allowed_hosts entries must have a port number');
+      }
+      const p = obj['port'] as number;
+      if (!Number.isInteger(p) || p < 1 || p > 65535) {
+        throw new Error('network.allowed_hosts port must be an integer between 1 and 65535');
+      }
+    }
+    networkConfig.allowed_hosts = hosts as AllowedHost[];
+  }
+  result['network'] = networkConfig;
 
   return result as CarapaceConfig;
 }

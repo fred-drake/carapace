@@ -30,6 +30,8 @@ export interface LifecycleManagerOptions {
   sessionManager: SessionManager;
   /** Milliseconds to wait for graceful stop before force-killing (default 10000). */
   shutdownTimeoutMs?: number;
+  /** Named Docker/Podman network for allowlisted connectivity. When set, containers use this network instead of `--network none`. */
+  networkName?: string;
 }
 
 /** High-level request to spawn an agent container. */
@@ -69,6 +71,7 @@ export class ContainerLifecycleManager {
   private readonly runtime: ContainerRuntime;
   private readonly sessionManager: SessionManager;
   private readonly shutdownTimeoutMs: number;
+  private readonly networkName?: string;
 
   /** Tracked containers indexed by session ID. */
   private readonly containers = new Map<string, ManagedContainer>();
@@ -77,6 +80,7 @@ export class ContainerLifecycleManager {
     this.runtime = options.runtime;
     this.sessionManager = options.sessionManager;
     this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+    this.networkName = options.networkName;
   }
 
   /**
@@ -93,7 +97,8 @@ export class ContainerLifecycleManager {
       image: request.image,
       name: containerName,
       readOnly: true,
-      networkDisabled: true,
+      networkDisabled: !this.networkName,
+      network: this.networkName,
       volumes: this.buildVolumes(request),
       socketMounts: [
         {

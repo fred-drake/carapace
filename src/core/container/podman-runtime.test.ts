@@ -210,6 +210,28 @@ describe('PodmanRuntime', () => {
       expect(mock.calls[0].args).not.toContain('--network');
     });
 
+    it('passes --network with named network when specified', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'id\n', stderr: '' });
+      await runtime.run(
+        defaultRunOptions({ networkDisabled: false, network: 'carapace-restricted' }),
+      );
+      const args = mock.calls[0].args;
+      const netIdx = args.indexOf('--network');
+      expect(netIdx).toBeGreaterThan(-1);
+      expect(args[netIdx + 1]).toBe('carapace-restricted');
+    });
+
+    it('named network takes precedence over networkDisabled', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'id\n', stderr: '' });
+      await runtime.run(
+        defaultRunOptions({ networkDisabled: true, network: 'carapace-restricted' }),
+      );
+      const args = mock.calls[0].args;
+      const netIdx = args.indexOf('--network');
+      expect(netIdx).toBeGreaterThan(-1);
+      expect(args[netIdx + 1]).toBe('carapace-restricted');
+    });
+
     // Podman-specific: :Z suffix for SELinux
     it('appends :Z suffix to volume mounts for SELinux relabeling', async () => {
       mock.handler.mockResolvedValueOnce({ stdout: 'id\n', stderr: '' });
