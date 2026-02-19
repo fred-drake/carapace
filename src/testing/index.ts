@@ -83,3 +83,21 @@ export {
   formatJsonReport,
   formatJUnitReport,
 } from './e2e/index.js';
+
+// Security E2E test infrastructure
+export {
+  type DefenseLayer,
+  type AdversarialScenario,
+  type DefenseMapping,
+  type DefenseReport,
+  DEFENSE_LAYER_DESCRIPTIONS,
+  messageProcessorTool,
+  memoryStoreTool,
+  memoryBriefTool,
+  credentialLeakerTool,
+  fileAccessTool,
+  shellExecTool,
+  settingsAccessorTool,
+  buildDefenseReport,
+  formatDefenseReport,
+} from './security-e2e/index.js';
