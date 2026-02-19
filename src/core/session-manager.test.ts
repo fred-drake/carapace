@@ -1,19 +1,21 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SessionManager } from './session-manager.js';
-import { MockContainerRuntime } from '../testing/mock-container-runtime.js';
-import type { SpawnOptions } from './container-runtime.js';
+import { MockContainerRuntime } from './container/mock-runtime.js';
+import type { ContainerRunOptions } from './container/runtime.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function defaultSpawnOptions(overrides?: Partial<SpawnOptions>): SpawnOptions {
+function defaultRunOptions(overrides?: Partial<ContainerRunOptions>): ContainerRunOptions {
   return {
     image: 'carapace-agent:latest',
     name: 'test-container',
-    mounts: [{ source: '/host/workspace', target: '/workspace', readonly: false }],
-    environment: { NODE_ENV: 'test' },
-    socketPath: '/tmp/carapace.sock',
+    readOnly: true,
+    networkDisabled: true,
+    volumes: [{ source: '/host/workspace', target: '/workspace', readonly: false }],
+    socketMounts: [{ hostPath: '/tmp/carapace.sock', containerPath: '/sockets/carapace.sock' }],
+    env: { NODE_ENV: 'test' },
     ...overrides,
   };
 }
@@ -37,35 +39,35 @@ describe('SessionManager', () => {
 
   describe('create', () => {
     it('creates a session from container info and group', async () => {
-      const container = await runtime.spawn(defaultSpawnOptions({ name: 'agent-1' }));
+      const container = await runtime.run(defaultRunOptions({ name: 'agent-1' }));
 
       const session = manager.create({
         containerId: container.id,
         group: 'email',
-        connectionIdentity: container.connectionIdentity,
+        connectionIdentity: `identity-${container.id}`,
       });
 
       expect(session.sessionId).toBeDefined();
       expect(session.containerId).toBe(container.id);
       expect(session.group).toBe('email');
-      expect(session.connectionIdentity).toBe(container.connectionIdentity);
+      expect(session.connectionIdentity).toBe(`identity-${container.id}`);
       expect(session.startedAt).toBeDefined();
       expect(new Date(session.startedAt).toISOString()).toBe(session.startedAt);
     });
 
     it('assigns unique session IDs', async () => {
-      const c1 = await runtime.spawn(defaultSpawnOptions({ name: 'a' }));
-      const c2 = await runtime.spawn(defaultSpawnOptions({ name: 'b' }));
+      const c1 = await runtime.run(defaultRunOptions({ name: 'a' }));
+      const c2 = await runtime.run(defaultRunOptions({ name: 'b' }));
 
       const s1 = manager.create({
         containerId: c1.id,
         group: 'group-a',
-        connectionIdentity: c1.connectionIdentity,
+        connectionIdentity: `identity-${c1.id}`,
       });
       const s2 = manager.create({
         containerId: c2.id,
         group: 'group-b',
-        connectionIdentity: c2.connectionIdentity,
+        connectionIdentity: `identity-${c2.id}`,
       });
 
       expect(s1.sessionId).not.toBe(s2.sessionId);
@@ -74,12 +76,12 @@ describe('SessionManager', () => {
 
   describe('get', () => {
     it('retrieves a session by session ID', async () => {
-      const container = await runtime.spawn(defaultSpawnOptions());
+      const container = await runtime.run(defaultRunOptions());
 
       const created = manager.create({
         containerId: container.id,
         group: 'email',
-        connectionIdentity: container.connectionIdentity,
+        connectionIdentity: `identity-${container.id}`,
       });
 
       const retrieved = manager.get(created.sessionId);
@@ -98,12 +100,12 @@ describe('SessionManager', () => {
 
   describe('delete', () => {
     it('removes a session by session ID', async () => {
-      const container = await runtime.spawn(defaultSpawnOptions());
+      const container = await runtime.run(defaultRunOptions());
 
       const session = manager.create({
         containerId: container.id,
         group: 'email',
-        connectionIdentity: container.connectionIdentity,
+        connectionIdentity: `identity-${container.id}`,
       });
 
       const deleted = manager.delete(session.sessionId);
@@ -118,17 +120,17 @@ describe('SessionManager', () => {
     });
 
     it('removes the connection identity mapping on delete', async () => {
-      const container = await runtime.spawn(defaultSpawnOptions());
+      const container = await runtime.run(defaultRunOptions());
 
       const session = manager.create({
         containerId: container.id,
         group: 'email',
-        connectionIdentity: container.connectionIdentity,
+        connectionIdentity: `identity-${container.id}`,
       });
 
       manager.delete(session.sessionId);
 
-      expect(manager.getByConnectionIdentity(container.connectionIdentity)).toBeNull();
+      expect(manager.getByConnectionIdentity(`identity-${container.id}`)).toBeNull();
     });
   });
 
@@ -138,15 +140,15 @@ describe('SessionManager', () => {
 
   describe('getByConnectionIdentity', () => {
     it('looks up a session by ZeroMQ connection identity', async () => {
-      const container = await runtime.spawn(defaultSpawnOptions());
+      const container = await runtime.run(defaultRunOptions());
 
       const created = manager.create({
         containerId: container.id,
         group: 'email',
-        connectionIdentity: container.connectionIdentity,
+        connectionIdentity: `identity-${container.id}`,
       });
 
-      const found = manager.getByConnectionIdentity(container.connectionIdentity);
+      const found = manager.getByConnectionIdentity(`identity-${container.id}`);
 
       expect(found).not.toBeNull();
       expect(found!.sessionId).toBe(created.sessionId);
@@ -165,12 +167,12 @@ describe('SessionManager', () => {
 
   describe('toSessionContext', () => {
     it('converts a session to a pipeline SessionContext', async () => {
-      const container = await runtime.spawn(defaultSpawnOptions());
+      const container = await runtime.run(defaultRunOptions());
 
       const session = manager.create({
         containerId: container.id,
         group: 'email',
-        connectionIdentity: container.connectionIdentity,
+        connectionIdentity: `identity-${container.id}`,
       });
 
       const ctx = manager.toSessionContext(session.sessionId);
@@ -194,18 +196,18 @@ describe('SessionManager', () => {
 
   describe('concurrent session isolation', () => {
     it('sessions for different groups are fully isolated', async () => {
-      const c1 = await runtime.spawn(defaultSpawnOptions({ name: 'email-agent' }));
-      const c2 = await runtime.spawn(defaultSpawnOptions({ name: 'slack-agent' }));
+      const c1 = await runtime.run(defaultRunOptions({ name: 'email-agent' }));
+      const c2 = await runtime.run(defaultRunOptions({ name: 'slack-agent' }));
 
       const emailSession = manager.create({
         containerId: c1.id,
         group: 'email',
-        connectionIdentity: c1.connectionIdentity,
+        connectionIdentity: `identity-${c1.id}`,
       });
       const slackSession = manager.create({
         containerId: c2.id,
         group: 'slack',
-        connectionIdentity: c2.connectionIdentity,
+        connectionIdentity: `identity-${c2.id}`,
       });
 
       // Each session has its own identity
@@ -214,54 +216,54 @@ describe('SessionManager', () => {
       expect(slackSession.group).toBe('slack');
 
       // Connection identity lookups return correct sessions
-      const foundEmail = manager.getByConnectionIdentity(c1.connectionIdentity);
-      const foundSlack = manager.getByConnectionIdentity(c2.connectionIdentity);
+      const foundEmail = manager.getByConnectionIdentity(`identity-${c1.id}`);
+      const foundSlack = manager.getByConnectionIdentity(`identity-${c2.id}`);
 
       expect(foundEmail!.group).toBe('email');
       expect(foundSlack!.group).toBe('slack');
     });
 
     it('deleting one session does not affect others', async () => {
-      const c1 = await runtime.spawn(defaultSpawnOptions({ name: 'a' }));
-      const c2 = await runtime.spawn(defaultSpawnOptions({ name: 'b' }));
+      const c1 = await runtime.run(defaultRunOptions({ name: 'a' }));
+      const c2 = await runtime.run(defaultRunOptions({ name: 'b' }));
 
       const s1 = manager.create({
         containerId: c1.id,
         group: 'group-a',
-        connectionIdentity: c1.connectionIdentity,
+        connectionIdentity: `identity-${c1.id}`,
       });
       const s2 = manager.create({
         containerId: c2.id,
         group: 'group-b',
-        connectionIdentity: c2.connectionIdentity,
+        connectionIdentity: `identity-${c2.id}`,
       });
 
       manager.delete(s1.sessionId);
 
       expect(manager.get(s1.sessionId)).toBeNull();
       expect(manager.get(s2.sessionId)).not.toBeNull();
-      expect(manager.getByConnectionIdentity(c2.connectionIdentity)).not.toBeNull();
+      expect(manager.getByConnectionIdentity(`identity-${c2.id}`)).not.toBeNull();
     });
 
     it('getAll returns all active sessions', async () => {
-      const c1 = await runtime.spawn(defaultSpawnOptions({ name: 'a' }));
-      const c2 = await runtime.spawn(defaultSpawnOptions({ name: 'b' }));
-      const c3 = await runtime.spawn(defaultSpawnOptions({ name: 'c' }));
+      const c1 = await runtime.run(defaultRunOptions({ name: 'a' }));
+      const c2 = await runtime.run(defaultRunOptions({ name: 'b' }));
+      const c3 = await runtime.run(defaultRunOptions({ name: 'c' }));
 
       manager.create({
         containerId: c1.id,
         group: 'g1',
-        connectionIdentity: c1.connectionIdentity,
+        connectionIdentity: `identity-${c1.id}`,
       });
       manager.create({
         containerId: c2.id,
         group: 'g2',
-        connectionIdentity: c2.connectionIdentity,
+        connectionIdentity: `identity-${c2.id}`,
       });
       manager.create({
         containerId: c3.id,
         group: 'g3',
-        connectionIdentity: c3.connectionIdentity,
+        connectionIdentity: `identity-${c3.id}`,
       });
 
       const all = manager.getAll();
@@ -278,18 +280,18 @@ describe('SessionManager', () => {
 
   describe('cleanup', () => {
     it('removes all sessions', async () => {
-      const c1 = await runtime.spawn(defaultSpawnOptions({ name: 'a' }));
-      const c2 = await runtime.spawn(defaultSpawnOptions({ name: 'b' }));
+      const c1 = await runtime.run(defaultRunOptions({ name: 'a' }));
+      const c2 = await runtime.run(defaultRunOptions({ name: 'b' }));
 
       manager.create({
         containerId: c1.id,
         group: 'g1',
-        connectionIdentity: c1.connectionIdentity,
+        connectionIdentity: `identity-${c1.id}`,
       });
       manager.create({
         containerId: c2.id,
         group: 'g2',
-        connectionIdentity: c2.connectionIdentity,
+        connectionIdentity: `identity-${c2.id}`,
       });
 
       expect(manager.getAll()).toHaveLength(2);
@@ -300,17 +302,17 @@ describe('SessionManager', () => {
     });
 
     it('clears connection identity mappings on cleanup', async () => {
-      const container = await runtime.spawn(defaultSpawnOptions());
+      const container = await runtime.run(defaultRunOptions());
 
       manager.create({
         containerId: container.id,
         group: 'email',
-        connectionIdentity: container.connectionIdentity,
+        connectionIdentity: `identity-${container.id}`,
       });
 
       manager.cleanup();
 
-      expect(manager.getByConnectionIdentity(container.connectionIdentity)).toBeNull();
+      expect(manager.getByConnectionIdentity(`identity-${container.id}`)).toBeNull();
     });
   });
 
@@ -320,30 +322,30 @@ describe('SessionManager', () => {
 
   describe('edge cases', () => {
     it('throws on duplicate connection identity', async () => {
-      const container = await runtime.spawn(defaultSpawnOptions());
+      const container = await runtime.run(defaultRunOptions());
 
       manager.create({
         containerId: container.id,
         group: 'email',
-        connectionIdentity: container.connectionIdentity,
+        connectionIdentity: `identity-${container.id}`,
       });
 
       expect(() =>
         manager.create({
           containerId: 'different-container',
           group: 'slack',
-          connectionIdentity: container.connectionIdentity,
+          connectionIdentity: `identity-${container.id}`,
         }),
       ).toThrow(/connection identity.*already in use/i);
     });
 
     it('throws on duplicate container ID', async () => {
-      const container = await runtime.spawn(defaultSpawnOptions());
+      const container = await runtime.run(defaultRunOptions());
 
       manager.create({
         containerId: container.id,
         group: 'email',
-        connectionIdentity: container.connectionIdentity,
+        connectionIdentity: `identity-${container.id}`,
       });
 
       expect(() =>
@@ -356,12 +358,12 @@ describe('SessionManager', () => {
     });
 
     it('getByContainerId returns session for a container', async () => {
-      const container = await runtime.spawn(defaultSpawnOptions());
+      const container = await runtime.run(defaultRunOptions());
 
       const created = manager.create({
         containerId: container.id,
         group: 'email',
-        connectionIdentity: container.connectionIdentity,
+        connectionIdentity: `identity-${container.id}`,
       });
 
       const found = manager.getByContainerId(container.id);
