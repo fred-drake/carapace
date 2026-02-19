@@ -22,8 +22,8 @@ Container (locked down)          Host (trusted)
 │  Claude Code         │         │  Core Router                │
 │  + skill files       │  ZeroMQ │  ├─ 6-stage validation      │
 │  + ipc binary ───────┼─────────┤  ├─ Envelope construction   │
-│                      │  Unix   │  ├─ Response sanitization    │
-│  No network          │  socket │  │                           │
+│                      │  Unix   │  ├─ Response sanitization   │
+│  No network          │  socket │  │                          │
 │  No credentials      │         │  Plugins                    │
 │  Read-only FS        │         │  ├─ Telegram (holds API key)│
 └──────────────────────┘         │  ├─ Email (holds OAuth)     │
