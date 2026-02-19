@@ -127,8 +127,11 @@ export function sanitizeFtsQuery(query: string): string {
   sanitized = sanitized.replace(/\bOR\b/g, '');
   sanitized = sanitized.replace(/\bNOT\b/g, '');
 
-  // Remove special characters used by FTS5
-  sanitized = sanitized.replace(/[":*^(){}]/g, '');
+  // Remove special characters used by FTS5 and SQL (quotes, operators, delimiters)
+  sanitized = sanitized.replace(/["':*^(){},;]/g, '');
+
+  // Remove SQL comment sequences
+  sanitized = sanitized.replace(/--/g, '');
 
   // Remove column filter syntax (word followed by colon)
   sanitized = sanitized.replace(/\w+:/g, '');
