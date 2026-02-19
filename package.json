@@ -21,11 +21,12 @@
     "lint": "oxlint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run --project unit --passWithNoTests",
+    "test:all": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage",
-    "test:integration": "vitest run --project integration",
-    "test:security": "vitest run --project security",
-    "test:e2e": "vitest run --project e2e"
+    "test:integration": "vitest run --project integration --passWithNoTests",
+    "test:security": "vitest run --project security --passWithNoTests",
+    "test:e2e": "vitest run --project e2e --passWithNoTests"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
