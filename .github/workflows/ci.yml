@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Stage 1: Quality gates (parallel)
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - run: nix develop --command pnpm install --frozen-lockfile
+      - run: nix develop --command pnpm run lint
+
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - run: nix develop --command pnpm install --frozen-lockfile
+      - run: nix develop --command pnpm run format:check
+
+  type-check:
+    name: Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - run: nix develop --command pnpm install --frozen-lockfile
+      - run: nix develop --command pnpm run type-check
+
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - run: nix develop --command pnpm install --frozen-lockfile
+      - run: nix develop --command pnpm audit --audit-level=high || true
+
+  # ---------------------------------------------------------------------------
+  # Stage 2: Unit tests + coverage
+  # ---------------------------------------------------------------------------
+  test:
+    name: Unit Tests
+    needs: [lint, format, type-check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+      - uses: DeterminateSystems/magic-nix-cache-action@main
+      - run: nix develop --command pnpm install --frozen-lockfile
+      - run: nix develop --command pnpm run test:coverage
+
+  # ---------------------------------------------------------------------------
+  # Stage 3: Integration tests (future — ENG-01, ENG-02)
+  # ---------------------------------------------------------------------------
+  # integration:
+  #   name: Integration Tests
+  #   needs: [test]
+  #   runs-on: ubuntu-latest
+
+  # ---------------------------------------------------------------------------
+  # Stage 4: Security tests (future — SEC-01)
+  # ---------------------------------------------------------------------------
+  # security:
+  #   name: Security Tests
+  #   needs: [test]
+  #   runs-on: ubuntu-latest
+
+  # ---------------------------------------------------------------------------
+  # Stage 5: Container build (future — DEVOPS-01 refinement)
+  # ---------------------------------------------------------------------------
+  # container:
+  #   name: Container Build
+  #   needs: [test]
+  #   runs-on: ubuntu-latest
+
+  # ---------------------------------------------------------------------------
+  # Stage 6: E2E tests (future — QA-10)
+  # ---------------------------------------------------------------------------
+  # e2e:
+  #   name: E2E Tests
+  #   needs: [container]
+  #   runs-on: ubuntu-latest
