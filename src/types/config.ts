@@ -59,6 +59,14 @@ export interface NetworkConfig {
   allowed_hosts?: AllowedHost[];
 }
 
+/** Valid log levels. */
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+/** `[logging]` section of config.toml. */
+export interface LoggingConfig {
+  level: LogLevel;
+}
+
 // ---------------------------------------------------------------------------
 // Top-level config
 // ---------------------------------------------------------------------------
@@ -76,6 +84,7 @@ export interface CarapaceConfig {
   security: SecurityConfig;
   hello: HelloConfig;
   network: NetworkConfig;
+  logging: LoggingConfig;
   [section: string]: unknown;
 }
 
@@ -90,6 +99,7 @@ export const DEFAULT_CONFIG: CarapaceConfig = {
   security: { max_sessions_per_group: 3 },
   hello: { enabled: true },
   network: {},
+  logging: { level: 'info' },
 };
 
 // ---------------------------------------------------------------------------
@@ -235,7 +245,7 @@ export function parseConfig(raw: Record<string, unknown>): CarapaceConfig {
 
   // Copy unknown sections first (extensibility)
   for (const key of Object.keys(raw)) {
-    if (!['runtime', 'plugins', 'security', 'hello', 'network'].includes(key)) {
+    if (!['runtime', 'plugins', 'security', 'hello', 'network', 'logging'].includes(key)) {
       result[key] = raw[key];
     }
   }
@@ -308,6 +318,17 @@ export function parseConfig(raw: Record<string, unknown>): CarapaceConfig {
     networkConfig.allowed_hosts = hosts as AllowedHost[];
   }
   result['network'] = networkConfig;
+
+  // --- logging ---
+  const rawLogging = (raw['logging'] ?? {}) as Record<string, unknown>;
+  const logLevel = (rawLogging['level'] as string | undefined) ?? DEFAULT_CONFIG.logging.level;
+  const VALID_LOG_LEVELS = new Set(['debug', 'info', 'warn', 'error']);
+  if (!VALID_LOG_LEVELS.has(logLevel)) {
+    throw new Error(
+      `Invalid logging.level: "${logLevel}". Must be one of: debug, info, warn, error`,
+    );
+  }
+  result['logging'] = { level: logLevel as LogLevel };
 
   return result as CarapaceConfig;
 }
