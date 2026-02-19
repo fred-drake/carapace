@@ -42,3 +42,9 @@ export {
 } from './plugin-test-sdk.js';
 
 export { describePluginConformance, type ConformanceOptions } from './conformance.js';
+
+export {
+  IntegrationHarness,
+  type HarnessSession,
+  type SendRequestOptions,
+} from './integration-harness.js';
