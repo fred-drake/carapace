@@ -1,12 +1,14 @@
 /**
  * Plugin loader for Carapace.
  *
- * Discovers plugins under a configured directory, validates each manifest
- * against the JSON Schema, registers tools in the catalog, and manages the
- * handler lifecycle (init → run → shutdown).
+ * Discovers plugins under two directories — built-in (read-only,
+ * shipped with Carapace) and user (mutable, user-managed) — validates
+ * each manifest against the JSON Schema, registers tools in the catalog,
+ * and manages the handler lifecycle (init → run → shutdown).
  *
- * Graceful degradation: a plugin that fails to load is recorded but does not
- * prevent other plugins from loading.
+ * User plugins override built-in plugins of the same name.
+ * Graceful degradation: a plugin that fails to load is recorded but
+ * does not prevent other plugins from loading.
  */
 
 import { readdir, readFile, access } from 'node:fs/promises';
@@ -19,7 +21,12 @@ const Ajv = _Ajv.default ?? _Ajv;
 import type { PluginManifest } from '../types/index.js';
 import { MANIFEST_JSON_SCHEMA } from '../types/index.js';
 import { ToolCatalog } from './tool-catalog.js';
-import type { PluginHandler, CoreServices, PluginLoadResult } from './plugin-handler.js';
+import type {
+  PluginHandler,
+  CoreServices,
+  PluginLoadResult,
+  PluginSource,
+} from './plugin-handler.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -36,18 +43,36 @@ const RESERVED_INTRINSIC_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
+// DiscoveredPlugin
+// ---------------------------------------------------------------------------
+
+/** A plugin found during directory scanning. */
+export interface DiscoveredPlugin {
+  name: string;
+  dir: string;
+  source: PluginSource;
+}
+
+// ---------------------------------------------------------------------------
 // PluginLoader
 // ---------------------------------------------------------------------------
 
 export class PluginLoader {
   private readonly toolCatalog: ToolCatalog;
-  private readonly pluginsDir: string;
+  private readonly userPluginsDir: string;
+  private readonly builtinPluginsDir: string | undefined;
   private readonly initTimeoutMs: number;
   private readonly loadedHandlers: Map<string, PluginHandler> = new Map();
 
-  constructor(opts: { toolCatalog: ToolCatalog; pluginsDir: string; initTimeoutMs?: number }) {
+  constructor(opts: {
+    toolCatalog: ToolCatalog;
+    userPluginsDir: string;
+    builtinPluginsDir?: string;
+    initTimeoutMs?: number;
+  }) {
     this.toolCatalog = opts.toolCatalog;
-    this.pluginsDir = opts.pluginsDir;
+    this.userPluginsDir = opts.userPluginsDir;
+    this.builtinPluginsDir = opts.builtinPluginsDir;
     this.initTimeoutMs = opts.initTimeoutMs ?? 10_000;
   }
 
@@ -56,30 +81,57 @@ export class PluginLoader {
   // -------------------------------------------------------------------------
 
   /**
-   * Scan the plugins directory for subdirectories containing a `manifest.json`.
-   * Returns a sorted list of absolute directory paths.
+   * Scan a single directory for subdirectories containing a `manifest.json`.
+   * Returns a list of discovered plugins with their source tag.
    */
-  async discoverPlugins(): Promise<string[]> {
+  private async discoverPluginsInDir(
+    dir: string,
+    source: PluginSource,
+  ): Promise<DiscoveredPlugin[]> {
     let entries: string[];
     try {
-      entries = await readdir(this.pluginsDir);
+      entries = await readdir(dir);
     } catch {
       return [];
     }
 
-    const results: string[] = [];
+    const results: DiscoveredPlugin[] = [];
     for (const entry of entries) {
-      const dir = join(this.pluginsDir, entry);
-      const manifestPath = join(dir, 'manifest.json');
+      const pluginDir = join(dir, entry);
+      const manifestPath = join(pluginDir, 'manifest.json');
       try {
         await access(manifestPath);
-        results.push(dir);
+        results.push({ name: entry, dir: pluginDir, source });
       } catch {
         // No manifest.json — skip this directory
       }
     }
 
-    return results.sort();
+    return results;
+  }
+
+  /**
+   * Scan both built-in and user plugin directories. User plugins override
+   * built-in plugins of the same name. Returns a sorted list of discovered
+   * plugins.
+   */
+  async discoverPlugins(): Promise<DiscoveredPlugin[]> {
+    // Scan built-in first, then user (user overrides)
+    const builtinPlugins = this.builtinPluginsDir
+      ? await this.discoverPluginsInDir(this.builtinPluginsDir, 'built-in')
+      : [];
+    const userPlugins = await this.discoverPluginsInDir(this.userPluginsDir, 'user');
+
+    // Merge: user overrides built-in of same name
+    const merged = new Map<string, DiscoveredPlugin>();
+    for (const plugin of builtinPlugins) {
+      merged.set(plugin.name, plugin);
+    }
+    for (const plugin of userPlugins) {
+      merged.set(plugin.name, plugin);
+    }
+
+    return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
 
   // -------------------------------------------------------------------------
@@ -97,7 +149,7 @@ export class PluginLoader {
    *   5. Call handler.initialize() with timeout
    *   6. Register tools in catalog
    */
-  async loadPlugin(pluginDir: string): Promise<PluginLoadResult> {
+  async loadPlugin(pluginDir: string, source: PluginSource = 'user'): Promise<PluginLoadResult> {
     const pluginName = basename(pluginDir);
 
     // 1. Read manifest
@@ -208,7 +260,7 @@ export class PluginLoader {
 
     this.loadedHandlers.set(pluginName, handler);
 
-    return { ok: true, pluginName, manifest, handler };
+    return { ok: true, pluginName, manifest, handler, source };
   }
 
   // -------------------------------------------------------------------------
@@ -216,15 +268,17 @@ export class PluginLoader {
   // -------------------------------------------------------------------------
 
   /**
-   * Discover and load all plugins. Returns results for both successes and
-   * failures. Failed plugins are excluded from the tool catalog.
+   * Discover and load all plugins from both directories. User plugins
+   * override built-in plugins of the same name. Returns results for
+   * both successes and failures. Failed plugins are excluded from the
+   * tool catalog.
    */
   async loadAll(): Promise<PluginLoadResult[]> {
-    const dirs = await this.discoverPlugins();
+    const discovered = await this.discoverPlugins();
     const results: PluginLoadResult[] = [];
 
-    for (const dir of dirs) {
-      const result = await this.loadPlugin(dir);
+    for (const plugin of discovered) {
+      const result = await this.loadPlugin(plugin.dir, plugin.source);
       results.push(result);
     }
 

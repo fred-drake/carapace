@@ -171,6 +171,13 @@ export function formatErrorMessage(parts: ErrorMessageParts): string {
 export type InitFailureCategory = 'invalid_manifest' | 'init_error' | 'timeout' | 'missing_handler';
 
 // ---------------------------------------------------------------------------
+// PluginSource
+// ---------------------------------------------------------------------------
+
+/** Whether a plugin was loaded from the built-in or user directory. */
+export type PluginSource = 'built-in' | 'user';
+
+// ---------------------------------------------------------------------------
 // PluginLoadResult
 // ---------------------------------------------------------------------------
 
@@ -178,5 +185,11 @@ export type InitFailureCategory = 'invalid_manifest' | 'init_error' | 'timeout' 
  * Discriminated union returned by PluginLoader for each plugin load attempt.
  */
 export type PluginLoadResult =
-  | { ok: true; pluginName: string; manifest: PluginManifest; handler: PluginHandler }
+  | {
+      ok: true;
+      pluginName: string;
+      manifest: PluginManifest;
+      handler: PluginHandler;
+      source: PluginSource;
+    }
   | { ok: false; pluginName: string; error: string; category: InitFailureCategory };
