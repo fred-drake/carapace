@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { parseArgs, runCommand, doctor, start, stop, status } from './cli.js';
+import { describe, it, expect, vi } from 'vitest';
+import { parseArgs, runCommand, doctor, start, stop, status, uninstall } from './cli.js';
 import { MockContainerRuntime } from './core/container/mock-runtime.js';
 import type { CliDeps } from './cli.js';
 
@@ -45,6 +45,14 @@ function createTestDeps(overrides?: Partial<CliDeps>): CliDeps {
     socketPath: '/run/sockets',
     dirExists: vi.fn().mockReturnValue(true),
     isWritable: vi.fn().mockReturnValue(true),
+    userHome: '/home/user',
+    dirSize: vi.fn().mockReturnValue(4096),
+    removeDir: vi.fn(),
+    readFile: vi.fn().mockReturnValue(''),
+    writeFile: vi.fn(),
+    shellConfigPaths: vi.fn().mockReturnValue([]),
+    listDir: vi.fn().mockReturnValue([]),
+    confirm: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
 }
@@ -88,6 +96,23 @@ describe('parseArgs', () => {
     const result = parseArgs(['node', 'carapace', '--help']);
     expect(result.flags['help']).toBe(true);
   });
+
+  it('parses the uninstall command', () => {
+    const result = parseArgs(['node', 'carapace', 'uninstall']);
+    expect(result.command).toBe('uninstall');
+  });
+
+  it('parses --yes flag with uninstall', () => {
+    const result = parseArgs(['node', 'carapace', 'uninstall', '--yes']);
+    expect(result.command).toBe('uninstall');
+    expect(result.flags['yes']).toBe(true);
+  });
+
+  it('parses --dry-run flag with uninstall', () => {
+    const result = parseArgs(['node', 'carapace', 'uninstall', '--dry-run']);
+    expect(result.command).toBe('uninstall');
+    expect(result.flags['dry-run']).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -121,6 +146,26 @@ describe('runCommand', () => {
     const code = await runCommand('--version', deps);
     expect(code).toBe(0);
     expect(deps.stdout).toHaveBeenCalledWith(expect.stringMatching(/\d+\.\d+\.\d+/));
+  });
+
+  it('dispatches to uninstall command', async () => {
+    const deps = createTestDeps();
+    const code = await runCommand('uninstall', deps, { yes: true });
+    expect(code).toBe(0);
+    expect(deps.removeDir).toHaveBeenCalled();
+  });
+
+  it('passes flags to uninstall command', async () => {
+    const deps = createTestDeps();
+    const code = await runCommand('uninstall', deps, { 'dry-run': true });
+    expect(code).toBe(0);
+    expect(deps.removeDir).not.toHaveBeenCalled();
+  });
+
+  it('shows uninstall in usage text', async () => {
+    const deps = createTestDeps();
+    await runCommand('', deps);
+    expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('uninstall'));
   });
 });
 
@@ -352,5 +397,31 @@ describe('status', () => {
     expect(code).toBe(1);
     expect(deps.removePidFile).toHaveBeenCalled();
     expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('not running'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// uninstall (CLI bridge)
+// ---------------------------------------------------------------------------
+
+describe('uninstall', () => {
+  it('removes CARAPACE_HOME with --yes flag', async () => {
+    const deps = createTestDeps();
+    const code = await uninstall(deps, { yes: true });
+    expect(code).toBe(0);
+    expect(deps.removeDir).toHaveBeenCalledWith(deps.home);
+  });
+
+  it('does not remove in dry-run mode', async () => {
+    const deps = createTestDeps();
+    const code = await uninstall(deps, { 'dry-run': true });
+    expect(code).toBe(0);
+    expect(deps.removeDir).not.toHaveBeenCalled();
+  });
+
+  it('asks for confirmation without --yes', async () => {
+    const deps = createTestDeps();
+    await uninstall(deps, {});
+    expect(deps.confirm).toHaveBeenCalled();
   });
 });

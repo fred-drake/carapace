@@ -6,6 +6,7 @@
  *   - `stop`   — Graceful shutdown via PID file signal.
  *   - `status` — Show whether Carapace is running.
  *   - `doctor` — Check dependencies and configuration.
+ *   - `uninstall` — Remove Carapace installation.
  *
  * All external dependencies are injected via {@link CliDeps} for testability.
  * The real `main()` wires production dependencies and calls `runCommand()`.
@@ -15,6 +16,7 @@ import { VERSION } from './index.js';
 import type { ContainerRuntime } from './core/container/runtime.js';
 import type { CarapaceConfig, DirectoryStructure } from './types/config.js';
 import { runAllChecks, type ExecFn, type ResolveModuleFn } from './core/health-checks.js';
+import { runUninstall, type UninstallDeps } from './uninstall.js';
 
 // ---------------------------------------------------------------------------
 // CLI dependency injection
@@ -60,6 +62,22 @@ export interface CliDeps {
   dirExists: (path: string) => boolean;
   /** Check if a path is writable. */
   isWritable: (path: string) => boolean;
+  /** User's home directory. */
+  userHome: string;
+  /** Get total size of a directory in bytes. */
+  dirSize: (path: string) => number;
+  /** Remove a directory recursively. */
+  removeDir: (path: string) => void;
+  /** Read file contents as string. */
+  readFile: (path: string) => string;
+  /** Write string contents to a file. */
+  writeFile: (path: string, content: string) => void;
+  /** Return candidate shell config file paths. */
+  shellConfigPaths: () => string[];
+  /** List entries in a directory (basenames only). */
+  listDir: (path: string) => string[];
+  /** Ask user for confirmation. Returns true if confirmed. */
+  confirm: (prompt: string) => Promise<boolean>;
 }
 
 // ---------------------------------------------------------------------------
@@ -100,21 +118,28 @@ export function parseArgs(argv: string[]): ParsedArgs {
 const USAGE = `Usage: carapace <command>
 
 Commands:
-  start    Launch the Carapace system
-  stop     Gracefully shut down
-  status   Show whether Carapace is running
-  doctor   Check dependencies and configuration
+  start      Launch the Carapace system
+  stop       Gracefully shut down
+  status     Show whether Carapace is running
+  doctor     Check dependencies and configuration
+  uninstall  Remove Carapace installation
 
 Options:
-  --version  Show version number
-  --help     Show this help message`;
+  --version    Show version number
+  --help       Show this help message
+  --yes        Skip confirmation prompts (uninstall)
+  --dry-run    Show what would be done without acting (uninstall)`;
 
 /**
  * Dispatch a command string to the appropriate handler.
  *
  * @returns Process exit code (0 = success, 1 = failure).
  */
-export async function runCommand(command: string, deps: CliDeps): Promise<number> {
+export async function runCommand(
+  command: string,
+  deps: CliDeps,
+  flags?: Record<string, boolean>,
+): Promise<number> {
   if (command === '--version') {
     deps.stdout(VERSION);
     return 0;
@@ -134,6 +159,8 @@ export async function runCommand(command: string, deps: CliDeps): Promise<number
       return status(deps);
     case 'doctor':
       return doctor(deps);
+    case 'uninstall':
+      return uninstall(deps, flags ?? {});
     default:
       deps.stderr(`Unknown command: "${command}"\n`);
       deps.stdout(USAGE);
@@ -289,6 +316,39 @@ export async function stop(deps: CliDeps): Promise<number> {
 /**
  * Report whether Carapace is currently running.
  */
+/**
+ * Remove the Carapace installation.
+ *
+ * Bridges CliDeps to UninstallDeps and delegates to runUninstall().
+ */
+export async function uninstall(deps: CliDeps, flags: Record<string, boolean>): Promise<number> {
+  const uninstallDeps: UninstallDeps = {
+    stdout: deps.stdout,
+    stderr: deps.stderr,
+    home: deps.home,
+    userHome: deps.userHome,
+    readPidFile: deps.readPidFile,
+    processExists: deps.processExists,
+    confirm: deps.confirm,
+    dirExists: deps.dirExists,
+    dirSize: deps.dirSize,
+    removeDir: deps.removeDir,
+    readFile: deps.readFile,
+    writeFile: deps.writeFile,
+    shellConfigPaths: deps.shellConfigPaths,
+    listDir: deps.listDir,
+  };
+
+  return runUninstall(uninstallDeps, {
+    yes: flags['yes'] === true,
+    dryRun: flags['dry-run'] === true,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// status
+// ---------------------------------------------------------------------------
+
 export async function status(deps: CliDeps): Promise<number> {
   const pid = deps.readPidFile();
 
