@@ -1,42 +1,67 @@
 # Carapace
 
-A personal AI agent that runs inside a locked-down container and never touches your credentials.
+A personal AI agent that runs inside a locked-down container and never touches
+your credentials.
 
 ## Why this exists
 
-AI agents are useful. Giving one access to your email, calendar, and messaging apps is terrifying. Most agent frameworks ask you to hand over API keys and let the agent call external services on its own. If something goes wrong -- prompt injection, a bug, a leaked context -- the agent has direct access to your accounts and there's nothing in between.
+AI agents are useful. Giving one access to your email, calendar, and messaging
+apps is terrifying. Most agent frameworks ask you to hand over API keys and let
+the agent call external services on its own. If something goes wrong -- prompt
+injection, a bug, a leaked context -- the agent has direct access to your
+accounts and there's nothing in between.
 
-Carapace doesn't work that way. The agent can't reach the internet. It can't read your filesystem. It never sees an API key. The only thing it can do is send a structured message through a Unix socket and wait for a response. Everything sensitive happens on the other side of that socket, where code you control holds the credentials and talks to external services.
+Carapace doesn't work that way. The agent can't reach the internet. It can't
+read your filesystem. It never sees an API key. The only thing it can do is
+send a structured message through a Unix socket and wait for a response.
+Everything sensitive happens on the other side of that socket, where code you
+control holds the credentials and talks to external services.
 
 ## How it works
 
 The system has two sides separated by a hard trust boundary.
 
-The agent (Claude Code) runs in a container with a read-only filesystem, no network access, and exactly one communication channel: a small binary called `ipc`. When the agent needs to send a message or check your calendar, it calls `ipc` with a topic and arguments. It can't construct HTTP requests or read environment variables. That's the entire surface area.
+The agent (Claude Code) runs in a container with a read-only filesystem, no
+network access, and exactly one communication channel: a small binary called
+`ipc`. When the agent needs to send a message or check your calendar, it calls
+`ipc` with a topic and arguments. It can't construct HTTP requests or read
+environment variables. That's the entire surface area.
 
-On the host side, a core router receives those messages over a ZeroMQ Unix socket. It never trusts what the container says about itself. Instead, it constructs a full identity envelope from its own session state -- who this container is, what group it belongs to, when the session started. Then it validates the payload, checks authorization, and routes the request to the right plugin. Plugins hold the credentials and call external APIs. Before the response goes back to the container, a sanitization layer strips anything that looks like a credential pattern.
+On the host side, a core router receives those messages over a ZeroMQ Unix
+socket. It never trusts what the container says about itself. Instead, it
+constructs a full identity envelope from its own session state -- who this
+container is, what group it belongs to, when the session started. Then it
+validates the payload, checks authorization, and routes the request to the
+right plugin. Plugins hold the credentials and call external APIs. Before the
+response goes back to the container, a sanitization layer strips anything that
+looks like a credential pattern.
 
 ```
 Container (locked down)          Host (trusted)
-┌──────────────────────┐         ┌─────────────────────────────┐
-│  Claude Code         │         │  Core Router                │
-│  + skill files       │  ZeroMQ │  ├─ 6-stage validation      │
-│  + ipc binary ───────┼─────────┤  ├─ Envelope construction   │
-│                      │  Unix   │  ├─ Response sanitization   │
-│  No network          │  socket │  │                          │
-│  No credentials      │         │  Plugins                    │
-│  Read-only FS        │         │  ├─ Telegram (holds API key)│
-└──────────────────────┘         │  ├─ Email (holds OAuth)     │
-                                 │  ├─ Calendar                │
-                                 │  └─ Memory (SQLite + FTS5)  │
-                                 └─────────────────────────────┘
++----------------------+         +-----------------------------+
+|  Claude Code         |         |  Core Router                |
+|  + skill files       |  ZeroMQ |  +- 6-stage validation      |
+|  + ipc binary -------+---------+  +- Envelope construction   |
+|                      |  Unix   |  +- Response sanitization   |
+|  No network          |  socket |  |                          |
+|  No credentials      |         |  Plugins                    |
+|  Read-only FS        |         |  +- Telegram (holds API key)|
++----------------------+         |  +- Email (holds OAuth)     |
+                                 |  +- Calendar                |
+                                 |  +- Memory (SQLite + FTS5)  |
+                                 +-----------------------------+
 ```
 
-The validation pipeline has six stages: envelope construction, topic validation, payload validation, authorization, user confirmation (for high-risk tools), and routing. If any stage fails, the agent gets a structured error code. It never gets raw stack traces or internal details.
+The validation pipeline has six stages: envelope construction, topic
+validation, payload validation, authorization, user confirmation (for
+high-risk tools), and routing. If any stage fails, the agent gets a
+structured error code. It never gets raw stack traces or internal details.
 
 ## Plugins
 
-Every plugin is a pair: a host-side handler written in TypeScript that holds credentials and calls APIs, and a container-side skill file (markdown) that teaches the agent what tools exist and how to call them.
+Every plugin is a pair: a host-side handler written in TypeScript that holds
+credentials and calls APIs, and a container-side skill file (markdown) that
+teaches the agent what tools exist and how to call them.
 
 ```
 plugins/memory/
@@ -45,73 +70,174 @@ plugins/memory/
   skills/memory.md      # teaches the agent about memory tools
 ```
 
-Drop a folder in `plugins/` and it gets discovered at startup. No registry, no marketplace. Each tool in the manifest has a risk level. Low-risk tools execute immediately. High-risk tools pause and ask the user before running. All tool schemas require `additionalProperties: false`, so the agent can't slip in unexpected fields.
+Drop a folder in `plugins/` and it gets discovered at startup. No registry, no
+marketplace. Each tool in the manifest has a risk level. Low-risk tools execute
+immediately. High-risk tools pause and ask the user before running. All tool
+schemas require `additionalProperties: false`, so the agent can't slip in
+unexpected fields.
 
-## What's working
+## Installation
 
-The foundation is done: message types, the ZeroMQ event bus (PUB/SUB) and request channel (ROUTER/DEALER), the message router with the full 6-stage pipeline, the filesystem-based plugin loader, the Dockerfile, and CI. Tests cover the validation pipeline, socket communication, plugin loading, and container runtime mocking.
+### Install script (recommended)
 
-Still in progress: the IPC binary, session manager, memory plugin, CLI entry point, response sanitization, container security verification, and the end-to-end test infrastructure (which uses Claude Code as the actual test driver -- the agent runs real sessions against mock plugins).
-
-The full task list is in [docs/TASKS.md](docs/TASKS.md).
-
-## Getting started
-
-### Prerequisites
-
-The dev environment uses [Nix Flakes](https://nixos.wiki/wiki/Flakes). This pins Node.js 22, pnpm, TypeScript, Docker, ZeroMQ, SQLite, and the linting tools so you don't have to install them separately.
-
-With Nix and direnv:
+The install script downloads a release tarball, verifies the SHA-256 checksum,
+pulls the container image, and verifies its cosign signature.
 
 ```bash
-git clone https://github.com/fred-drake/carapace.git
-cd carapace
-direnv allow        # loads the Nix dev shell
-pnpm install
+curl -fsSL https://get.carapace.dev | sh
 ```
 
-Without direnv:
+Options:
 
 ```bash
-nix develop
-pnpm install
+# Preview what would happen without making changes
+sh install.sh --dry-run
+
+# Install a specific version with a specific container runtime
+sh install.sh --version v1.0.0 --runtime docker
+
+# Non-interactive (skip all prompts)
+sh install.sh --yes
+
+# Don't modify shell profile for PATH
+sh install.sh --no-modify-path
 ```
 
-### Build and test
+The install script detects your platform (`darwin`/`linux`) and architecture
+(`arm64`/`x64`), downloads the matching release artifact, and installs to
+`$CARAPACE_HOME` (defaults to `~/.carapace/`).
+
+**Requirements**: `curl` or `wget`, `tar`, `sha256sum` or `shasum`, and a
+container runtime (`docker`, `podman`, or Apple Containers on macOS 26+).
+
+### Nix
+
+If you use [Nix](https://nixos.org/) with flakes enabled:
 
 ```bash
-pnpm run build      # compile TypeScript
-pnpm test           # unit tests
-pnpm test:coverage  # tests with coverage
-pnpm run lint       # oxlint
-pnpm run format     # prettier
+nix profile install github:fred-drake/carapace
 ```
 
-Run a single test file:
+This installs the host binary and pins all runtime dependencies. The exact
+flake outputs are being finalized in DEVOPS-18.
+
+## Quick start
 
 ```bash
-pnpm test -- src/core/router.test.ts
+# Check that all dependencies are satisfied
+carapace doctor
+
+# Start the system (init container, detect runtime, begin session)
+carapace start
+
+# Check running status
+carapace status
+
+# Graceful shutdown
+carapace stop
 ```
 
-## Architecture
+### Configuration
 
-The full design doc is [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Here's the short version.
+Configuration lives at `$CARAPACE_HOME/config.toml`. View and modify it with
+the built-in config subcommand:
 
-Two ZeroMQ channels run over Unix sockets. PUB/SUB carries events that start sessions -- an email arrives, a cron fires. ROUTER/DEALER carries tool invocations during sessions, when the agent needs a result from a plugin.
+```bash
+# Show current configuration
+carapace config show
 
-The wire format is deliberately minimal. The container sends three fields: `topic`, `correlation`, `arguments`. The host fills in everything else (ID, version, source, group, timestamp) from its own session state. Zero overlap between what the container sends and what the host constructs. This makes identity spoofing structurally impossible.
+# Get a specific value
+carapace config get runtime.engine
 
-Storage is host-side SQLite at `data/{feature}/{group}.sqlite`. Each group gets its own database. Credentials stay on the host.
+# Set a value
+carapace config set runtime.engine docker
+```
 
-Memory is a plugin, not a core feature. It stores typed entries (preferences, facts, instructions, corrections) in SQLite with FTS5 full-text search. All memories are treated as untrusted because they may have been written during a session that was influenced by prompt injection. When the agent starts a new session, the memory brief flags behavioral entries and tells the agent to verify anything unusual with the user. The full design is in [docs/MEMORY_DRAFT.md](docs/MEMORY_DRAFT.md).
+### Updating
+
+Check for and install updates explicitly. Carapace never phones home on
+startup.
+
+```bash
+# Check for available updates
+carapace update --check
+
+# Download, verify, and install the latest release
+carapace update
+
+# Skip the confirmation prompt
+carapace update --yes
+```
+
+Updates verify SHA-256 checksums on the host artifact, pull and pin the
+matching container image digest, and run `carapace doctor` post-update.
+If any verification fails, the current install is left intact.
+
+### Managing credentials
+
+```bash
+# Set an API key for a plugin
+carapace auth api-key --plugin telegram --key "..."
+
+# Interactive login flow for OAuth plugins
+carapace auth login --plugin email
+
+# Check credential status across plugins
+carapace auth status
+```
+
+Credentials are stored on the host only. The container never sees them.
+
+### Uninstalling
+
+```bash
+carapace uninstall
+```
+
+This removes the installation at `$CARAPACE_HOME` after confirmation.
+Pass `--yes` to skip the prompt.
+
+## Security model
+
+Carapace's security is architectural, not application-level:
+
+- **Container isolation** -- The agent runs in a VM-based container with no
+  network, read-only filesystem, and no access to host credentials.
+- **Identity construction** -- The host constructs message identity from its
+  own session state. The container can't claim to be someone else.
+- **Schema enforcement** -- All tool argument schemas require
+  `additionalProperties: false`. The agent can't inject unexpected fields.
+- **Digest pinning** -- Container images are referenced by sha256 digest, not
+  mutable tags. Digests are verified on every pull.
+- **Artifact verification** -- Release tarballs are verified against SHA-256
+  checksums. Container images are verified via cosign signatures.
+- **Response sanitization** -- Credential patterns are stripped from responses
+  before they reach the container.
+- **Memory provenance** -- Memories written during sessions are tagged as
+  untrusted. Behavioral entries are flagged for user verification on new
+  sessions.
 
 ## Project status
 
-Early stage, active development. The foundation (P0 tasks) is complete. Core functionality (P1) and features (P2) are in progress. [docs/TASKS.md](docs/TASKS.md) has the full breakdown with dependencies.
+Early stage, active development. The foundation (P0 tasks) and core
+functionality (P1) are complete. Features and polish (P2) are in progress.
+See [docs/TASKS.md](docs/TASKS.md) for the full breakdown.
 
-## Docs
+## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) -- system design, messaging protocol, security model
-- [docs/MEMORY_DRAFT.md](docs/MEMORY_DRAFT.md) -- memory plugin design, FTS5 search, provenance tracking
-- [docs/FUTURE_FEATURES.md](docs/FUTURE_FEATURES.md) -- roadmap with tiered priorities
-- [docs/TASKS.md](docs/TASKS.md) -- development task list with dependency graph
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) -- System design, messaging
+  protocol, security model, error codes
+- [docs/PLUGIN_AUTHORING.md](docs/PLUGIN_AUTHORING.md) -- Complete guide to
+  building plugins
+- [docs/MEMORY_DRAFT.md](docs/MEMORY_DRAFT.md) -- Memory plugin design, FTS5
+  search, provenance tracking
+- [docs/FUTURE_FEATURES.md](docs/FUTURE_FEATURES.md) -- Roadmap with tiered
+  priorities
+- [docs/TASKS.md](docs/TASKS.md) -- Development task list
+- [CONTRIBUTING.md](CONTRIBUTING.md) -- Developer setup, build commands, PR
+  workflow
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, build commands,
+testing guidelines, and the PR workflow.
