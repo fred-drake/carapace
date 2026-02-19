@@ -1,4 +1,16 @@
 export {
+  type DeepPartial,
+  deepMerge,
+  createWireMessage,
+  createEventEnvelope,
+  createRequestEnvelope,
+  createResponseEnvelope,
+  createToolDeclaration,
+  createManifest,
+  createErrorPayload,
+} from './factories.js';
+
+export {
   type InjectedErrorType,
   type PubSubMessage,
   type RouterMessage,
