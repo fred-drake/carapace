@@ -33,12 +33,12 @@ export class MessageRouter {
   private readonly catalog: ToolCatalog;
   private readonly stages: PipelineStage[];
 
-  constructor(toolCatalog: ToolCatalog) {
+  constructor(toolCatalog: ToolCatalog, stages?: PipelineStage[]) {
     this.catalog = toolCatalog;
 
     // Stages 1-5 are synchronous; stage 6 (dispatch) is async and handled
     // separately after the synchronous pipeline completes.
-    this.stages = [
+    this.stages = stages ?? [
       stage1Construct,
       createStage2Topic(this.catalog),
       stage3Payload,
@@ -68,8 +68,12 @@ export class MessageRouter {
           if (!result.ok) {
             return this.buildErrorResponse(wire, result.error);
           }
-          // ok: true should not happen from stages 1-5, but handle gracefully
-          return this.buildSuccessResponse(result);
+          // ok: true should not happen from stages 1-5; defensive guard
+          return this.buildErrorResponse(wire, {
+            code: ErrorCode.PLUGIN_ERROR,
+            message: 'Pipeline error: unexpected success from synchronous stage',
+            retriable: ERROR_RETRIABLE_DEFAULTS[ErrorCode.PLUGIN_ERROR],
+          });
         }
 
         // Stage returned an enriched context — continue
@@ -138,15 +142,5 @@ export class MessageRouter {
         error,
       },
     };
-  }
-
-  /**
-   * Build a success ResponseEnvelope from a completed PipelineResult.
-   * This path is not expected from the normal pipeline flow but exists
-   * for completeness.
-   */
-  private buildSuccessResponse(_result: PipelineResult & { ok: true }): ResponseEnvelope {
-    // This should not be reached in normal flow
-    throw new Error('Unexpected success result from synchronous pipeline stage');
   }
 }

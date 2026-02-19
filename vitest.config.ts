@@ -65,6 +65,28 @@ export default defineConfig({
       reporter: ['text', 'lcov', 'html'],
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.{test,spec}.ts', 'src/**/*.d.ts'],
+      thresholds: {
+        // Global thresholds — CI fails if coverage drops below these
+        lines: 80,
+        branches: 70,
+        // Per-path thresholds for security-critical modules
+        'src/core/router.ts': {
+          lines: 90,
+          branches: 80,
+        },
+        'src/core/message-validator.ts': {
+          lines: 90,
+          branches: 80,
+        },
+        'src/core/error-handler.ts': {
+          lines: 90,
+          branches: 80,
+        },
+        'src/core/pipeline/*': {
+          lines: 90,
+          branches: 80,
+        },
+      },
     },
   },
 });
