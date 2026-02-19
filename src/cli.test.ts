@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseArgs, runCommand, doctor, start, stop, status, uninstall } from './cli.js';
+import { parseArgs, runCommand, doctor, start, stop, status, uninstall, auth } from './cli.js';
 import { MockContainerRuntime } from './core/container/mock-runtime.js';
 import type { CliDeps } from './cli.js';
 
@@ -53,6 +53,12 @@ function createTestDeps(overrides?: Partial<CliDeps>): CliDeps {
     shellConfigPaths: vi.fn().mockReturnValue([]),
     listDir: vi.fn().mockReturnValue([]),
     confirm: vi.fn().mockResolvedValue(true),
+    promptSecret: vi.fn().mockResolvedValue('sk-ant-api03-testkey123'),
+    promptString: vi.fn().mockResolvedValue('oauth-test-token'),
+    validateApiKey: vi.fn().mockResolvedValue({ valid: true }),
+    fileExists: vi.fn().mockReturnValue(false),
+    writeFileSecure: vi.fn(),
+    fileStat: vi.fn().mockReturnValue(null),
     ...overrides,
   };
 }
@@ -113,6 +119,30 @@ describe('parseArgs', () => {
     expect(result.command).toBe('uninstall');
     expect(result.flags['dry-run']).toBe(true);
   });
+
+  it('parses auth command with subcommand', () => {
+    const result = parseArgs(['node', 'carapace', 'auth', 'api-key']);
+    expect(result.command).toBe('auth');
+    expect(result.subcommand).toBe('api-key');
+  });
+
+  it('parses auth login subcommand', () => {
+    const result = parseArgs(['node', 'carapace', 'auth', 'login']);
+    expect(result.command).toBe('auth');
+    expect(result.subcommand).toBe('login');
+  });
+
+  it('parses auth status subcommand', () => {
+    const result = parseArgs(['node', 'carapace', 'auth', 'status']);
+    expect(result.command).toBe('auth');
+    expect(result.subcommand).toBe('status');
+  });
+
+  it('parses auth without subcommand', () => {
+    const result = parseArgs(['node', 'carapace', 'auth']);
+    expect(result.command).toBe('auth');
+    expect(result.subcommand).toBe('');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -166,6 +196,33 @@ describe('runCommand', () => {
     const deps = createTestDeps();
     await runCommand('', deps);
     expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('uninstall'));
+  });
+
+  it('dispatches auth api-key subcommand', async () => {
+    const deps = createTestDeps();
+    const code = await runCommand('auth', deps, {}, 'api-key');
+    expect(code).toBe(0);
+    expect(deps.promptSecret).toHaveBeenCalled();
+  });
+
+  it('dispatches auth status subcommand', async () => {
+    const deps = createTestDeps();
+    const code = await runCommand('auth', deps, {}, 'status');
+    expect(code).toBe(0);
+  });
+
+  it('shows auth usage for unknown auth subcommand', async () => {
+    const deps = createTestDeps();
+    const code = await runCommand('auth', deps, {}, 'unknown');
+    expect(code).toBe(1);
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Unknown auth subcommand'));
+  });
+
+  it('shows auth usage when no auth subcommand given', async () => {
+    const deps = createTestDeps();
+    const code = await runCommand('auth', deps, {}, '');
+    expect(code).toBe(0);
+    expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('auth'));
   });
 });
 
@@ -423,5 +480,52 @@ describe('uninstall', () => {
     const deps = createTestDeps();
     await uninstall(deps, {});
     expect(deps.confirm).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// auth (CLI bridge)
+// ---------------------------------------------------------------------------
+
+describe('auth', () => {
+  it('dispatches api-key subcommand', async () => {
+    const deps = createTestDeps();
+    const code = await auth(deps, 'api-key');
+    expect(code).toBe(0);
+    expect(deps.writeFileSecure).toHaveBeenCalledWith(
+      expect.stringContaining('anthropic-api-key'),
+      expect.any(String),
+      0o600,
+    );
+  });
+
+  it('dispatches login subcommand', async () => {
+    const deps = createTestDeps();
+    const code = await auth(deps, 'login');
+    expect(code).toBe(0);
+    expect(deps.writeFileSecure).toHaveBeenCalledWith(
+      expect.stringContaining('claude-oauth-token'),
+      expect.any(String),
+      0o600,
+    );
+  });
+
+  it('dispatches status subcommand', async () => {
+    const deps = createTestDeps();
+    const code = await auth(deps, 'status');
+    expect(code).toBe(0);
+  });
+
+  it('shows auth usage for empty subcommand', async () => {
+    const deps = createTestDeps();
+    const code = await auth(deps, '');
+    expect(code).toBe(0);
+    expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('api-key'));
+  });
+
+  it('returns error for unknown subcommand', async () => {
+    const deps = createTestDeps();
+    const code = await auth(deps, 'bogus');
+    expect(code).toBe(1);
   });
 });

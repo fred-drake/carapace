@@ -7,6 +7,7 @@
  *   - `status` — Show whether Carapace is running.
  *   - `doctor` — Check dependencies and configuration.
  *   - `uninstall` — Remove Carapace installation.
+ *   - `auth`      — Manage credentials (api-key, login, status).
  *
  * All external dependencies are injected via {@link CliDeps} for testability.
  * The real `main()` wires production dependencies and calls `runCommand()`.
@@ -17,6 +18,14 @@ import type { ContainerRuntime } from './core/container/runtime.js';
 import type { CarapaceConfig, DirectoryStructure } from './types/config.js';
 import { runAllChecks, type ExecFn, type ResolveModuleFn } from './core/health-checks.js';
 import { runUninstall, type UninstallDeps } from './uninstall.js';
+import {
+  runAuthApiKey,
+  runAuthLogin,
+  runAuthStatus,
+  type AuthDeps,
+  type ValidationResult,
+  type CredentialInfo,
+} from './auth-command.js';
 
 // ---------------------------------------------------------------------------
 // CLI dependency injection
@@ -78,6 +87,18 @@ export interface CliDeps {
   listDir: (path: string) => string[];
   /** Ask user for confirmation. Returns true if confirmed. */
   confirm: (prompt: string) => Promise<boolean>;
+  /** Prompt for a secret value (masked input). */
+  promptSecret: (prompt: string) => Promise<string>;
+  /** Prompt for a string value (visible input). */
+  promptString: (prompt: string) => Promise<string>;
+  /** Validate an Anthropic API key. */
+  validateApiKey: (key: string) => Promise<ValidationResult>;
+  /** Check if a file exists. */
+  fileExists: (path: string) => boolean;
+  /** Write file with specific permissions. */
+  writeFileSecure: (path: string, content: string, mode: number) => void;
+  /** Get file stat info, or null if not found. */
+  fileStat: (path: string) => CredentialInfo | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -87,28 +108,33 @@ export interface CliDeps {
 /** Parsed CLI arguments. */
 export interface ParsedArgs {
   command: string;
+  subcommand: string;
   flags: Record<string, boolean>;
 }
 
 /**
- * Parse process.argv into a command and flags.
+ * Parse process.argv into a command, optional subcommand, and flags.
  *
- * Expects argv in the form: [node, script, command?, ...flags]
+ * Expects argv in the form: [node, script, command?, subcommand?, ...flags]
+ * For commands with subcommands (e.g. `auth api-key`), both are captured.
  */
 export function parseArgs(argv: string[]): ParsedArgs {
   const args = argv.slice(2);
   const flags: Record<string, boolean> = {};
   let command = '';
+  let subcommand = '';
 
   for (const arg of args) {
     if (arg.startsWith('--')) {
       flags[arg.slice(2)] = true;
     } else if (!command) {
       command = arg;
+    } else if (!subcommand) {
+      subcommand = arg;
     }
   }
 
-  return { command, flags };
+  return { command, subcommand, flags };
 }
 
 // ---------------------------------------------------------------------------
@@ -118,11 +144,14 @@ export function parseArgs(argv: string[]): ParsedArgs {
 const USAGE = `Usage: carapace <command>
 
 Commands:
-  start      Launch the Carapace system
-  stop       Gracefully shut down
-  status     Show whether Carapace is running
-  doctor     Check dependencies and configuration
-  uninstall  Remove Carapace installation
+  start            Launch the Carapace system
+  stop             Gracefully shut down
+  status           Show whether Carapace is running
+  doctor           Check dependencies and configuration
+  uninstall        Remove Carapace installation
+  auth api-key     Configure Anthropic API key
+  auth login       Configure OAuth token
+  auth status      Show credential status
 
 Options:
   --version    Show version number
@@ -139,6 +168,7 @@ export async function runCommand(
   command: string,
   deps: CliDeps,
   flags?: Record<string, boolean>,
+  subcommand?: string,
 ): Promise<number> {
   if (command === '--version') {
     deps.stdout(VERSION);
@@ -161,6 +191,8 @@ export async function runCommand(
       return doctor(deps);
     case 'uninstall':
       return uninstall(deps, flags ?? {});
+    case 'auth':
+      return auth(deps, subcommand ?? '');
     default:
       deps.stderr(`Unknown command: "${command}"\n`);
       deps.stdout(USAGE);
@@ -316,6 +348,50 @@ export async function stop(deps: CliDeps): Promise<number> {
 /**
  * Report whether Carapace is currently running.
  */
+const AUTH_USAGE = `Usage: carapace auth <subcommand>
+
+Subcommands:
+  api-key    Configure Anthropic API key
+  login      Configure OAuth token
+  status     Show credential status`;
+
+/**
+ * Dispatch auth subcommands.
+ */
+export async function auth(deps: CliDeps, subcommand: string): Promise<number> {
+  const authDeps: AuthDeps = {
+    stdout: deps.stdout,
+    stderr: deps.stderr,
+    home: deps.home,
+    promptSecret: deps.promptSecret,
+    promptString: deps.promptString,
+    validateApiKey: deps.validateApiKey,
+    fileExists: deps.fileExists,
+    readFile: deps.readFile,
+    writeFileSecure: deps.writeFileSecure,
+    fileStat: deps.fileStat,
+  };
+
+  switch (subcommand) {
+    case 'api-key':
+      return runAuthApiKey(authDeps);
+    case 'login':
+      return runAuthLogin(authDeps);
+    case 'status':
+      return runAuthStatus(authDeps);
+    default:
+      if (subcommand) {
+        deps.stderr(`Unknown auth subcommand: "${subcommand}"\n`);
+      }
+      deps.stdout(AUTH_USAGE);
+      return subcommand ? 1 : 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// uninstall
+// ---------------------------------------------------------------------------
+
 /**
  * Remove the Carapace installation.
  *
