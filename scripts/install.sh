@@ -89,7 +89,7 @@ done
 # ---------------------------------------------------------------------------
 
 TMPDIR_INSTALL="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR_INSTALL"' EXIT INT TERM
+trap 'rm -rf "$TMPDIR_INSTALL"; rm -rf "${CARAPACE_HOME:?}/.installing"' EXIT INT TERM
 
 # ---------------------------------------------------------------------------
 # Output helpers
@@ -259,7 +259,7 @@ resolve_version() {
     VERSION="$REQUESTED_VERSION"
   else
     info "Fetching latest release..."
-    VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest" \
+    VERSION="$(curl --proto =https -fsSL "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest" \
       | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
     if [ -z "$VERSION" ]; then
       fail "Could not determine latest version"
@@ -310,8 +310,8 @@ download_tarball() {
     return 0
   fi
 
-  curl -fsSL -o "${TMPDIR_INSTALL}/${TARBALL_NAME}" "$TARBALL_URL"
-  curl -fsSL -o "${TMPDIR_INSTALL}/${TARBALL_NAME}.sha256" "$CHECKSUM_URL"
+  curl --proto =https -fsSL -o "${TMPDIR_INSTALL}/${TARBALL_NAME}" "$TARBALL_URL"
+  curl --proto =https -fsSL -o "${TMPDIR_INSTALL}/${TARBALL_NAME}.sha256" "$CHECKSUM_URL"
 
   success "Downloaded ${TARBALL_NAME}"
 }
@@ -453,15 +453,6 @@ pull_container_image() {
 
   info "Pulling container image..."
 
-  # Build proxy args for container runtime
-  PROXY_ARGS=""
-  if [ -n "${HTTPS_PROXY:-}" ]; then
-    PROXY_ARGS="-e HTTPS_PROXY=${HTTPS_PROXY}"
-  fi
-  if [ -n "${HTTP_PROXY:-}" ]; then
-    PROXY_ARGS="${PROXY_ARGS} -e HTTP_PROXY=${HTTP_PROXY}"
-  fi
-
   case "$RUNTIME" in
     docker)
       docker pull "$IMAGE" || {
@@ -494,12 +485,13 @@ pull_container_image() {
   # Verify cosign signature
   info "Verifying container image signature..."
   if command -v cosign > /dev/null 2>&1; then
-    cosign verify --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+    if cosign verify --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
       --certificate-identity-regexp="github\\.com/${REPO_OWNER}/${REPO_NAME}" \
-      "$IMAGE" > /dev/null 2>&1 || {
-        warn "Cosign signature verification failed — image may not be signed"
-      }
-    success "Image signature verified (cosign)"
+      "$IMAGE" > /dev/null 2>&1; then
+      success "Image signature verified (cosign)"
+    else
+      warn "Cosign signature verification failed — image may not be signed"
+    fi
   else
     warn "cosign not found — skipping image signature verification"
     info "Install cosign for image verification: https://docs.sigstore.dev/cosign/system_config/installation/"
