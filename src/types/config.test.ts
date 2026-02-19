@@ -219,6 +219,22 @@ describe('parseConfig', () => {
       }),
     ).toThrow(/port.*1.*65535/i);
   });
+
+  it('parses logging section with valid level', () => {
+    const result = parseConfig({ logging: { level: 'debug' } });
+    expect(result.logging.level).toBe('debug');
+  });
+
+  it('defaults logging level to info when logging section is absent', () => {
+    const result = parseConfig({});
+    expect(result.logging.level).toBe('info');
+  });
+
+  it('rejects invalid logging level', () => {
+    expect(() => parseConfig({ logging: { level: 'verbose' } })).toThrow(
+      /invalid.*logging\.level/i,
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
