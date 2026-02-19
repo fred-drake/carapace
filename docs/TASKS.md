@@ -19,8 +19,9 @@ These tasks must be completed first. They establish the project skeleton, messag
 backbone, core routing, test infrastructure, and CI pipeline that everything else
 depends on.
 
-### ARCH-01: Bootstrap project structure
+### ~~ARCH-01: Bootstrap project structure~~ DONE
 
+**Status**: Completed (PR #1, merged 2026-02-18)
 **Role**: Architect / Engineer
 **Description**: Initialize package.json, tsconfig.json (strict mode), pnpm workspace
 config, and directory layout: `src/core/`, `src/ipc/`, `src/plugins/`, `src/types/`,
