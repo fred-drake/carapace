@@ -70,10 +70,10 @@ export class MessageValidator {
   private readonly stages: PipelineStage[];
   readonly onRejection?: (entry: RejectionEntry) => void;
 
-  constructor(options: MessageValidatorOptions) {
+  constructor(options: MessageValidatorOptions, stages?: PipelineStage[]) {
     this.onRejection = options.onRejection;
 
-    this.stages = [
+    this.stages = stages ?? [
       stage1Construct,
       createStage2Topic(options.catalog),
       stage3Payload,

@@ -5,7 +5,7 @@ import { SchemaValidator } from './schema-validator.js';
 import { RateLimiter } from './rate-limiter.js';
 import { ErrorCode } from '../types/errors.js';
 import { createWireMessage, createToolDeclaration } from '../testing/factories.js';
-import type { SessionContext } from './pipeline/types.js';
+import type { SessionContext, PipelineStage, PipelineContext } from './pipeline/types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -401,6 +401,35 @@ describe('MessageValidator', () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe(ErrorCode.UNAUTHORIZED);
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Defensive guards
+  // ---------------------------------------------------------------------------
+
+  describe('defensive pipeline guards', () => {
+    it('returns PLUGIN_ERROR when pipeline completes without envelope or tool', () => {
+      // Use custom stages that pass through context unchanged (no envelope/tool set)
+      const passthrough: PipelineStage = {
+        name: 'passthrough',
+        execute: (ctx: PipelineContext) => ctx,
+      };
+      const minimalOptions = {
+        catalog: new ToolCatalog(),
+        schemaValidator: new SchemaValidator(),
+        rateLimiter: new RateLimiter({ requestsPerMinute: 60, burstSize: 10 }),
+      };
+      const customValidator = new MessageValidator(minimalOptions, [passthrough]);
+      const wire = createWireMessage({ topic: 'tool.invoke.test' });
+
+      const result = customValidator.validate(wire, makeSession());
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('PLUGIN_ERROR');
+        expect(result.error.message).toContain('envelope or tool not resolved');
       }
     });
   });
