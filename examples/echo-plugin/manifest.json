@@ -1,0 +1,28 @@
+{
+  "description": "Echoes input text back — minimal plugin example",
+  "version": "1.0.0",
+  "app_compat": ">=0.1.0",
+  "author": { "name": "Carapace" },
+  "provides": {
+    "channels": [],
+    "tools": [
+      {
+        "name": "echo",
+        "description": "Echoes input text back to the caller",
+        "risk_level": "low",
+        "arguments_schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text"],
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "The text to echo back"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "subscribes": []
+}
