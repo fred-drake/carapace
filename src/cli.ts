@@ -14,6 +14,7 @@
 import { VERSION } from './index.js';
 import type { ContainerRuntime } from './core/container/runtime.js';
 import type { CarapaceConfig, DirectoryStructure } from './types/config.js';
+import { runAllChecks, type ExecFn, type ResolveModuleFn } from './core/health-checks.js';
 
 // ---------------------------------------------------------------------------
 // CLI dependency injection
@@ -47,6 +48,18 @@ export interface CliDeps {
   loadConfig: (home: string) => CarapaceConfig;
   /** Ensure directory structure exists under CARAPACE_HOME. */
   ensureDirs: (home: string) => DirectoryStructure;
+  /** Execute a CLI tool (for health checks). */
+  exec: ExecFn;
+  /** Resolve a Node.js module path (for health checks). */
+  resolveModule: ResolveModuleFn;
+  /** Extra plugin directories to verify (from config). */
+  pluginDirs: string[];
+  /** Unix socket path to verify writability. */
+  socketPath: string;
+  /** Check if a directory exists. */
+  dirExists: (path: string) => boolean;
+  /** Check if a path is writable. */
+  isWritable: (path: string) => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,128 +145,48 @@ export async function runCommand(command: string, deps: CliDeps): Promise<number
 // doctor
 // ---------------------------------------------------------------------------
 
-interface CheckResult {
-  name: string;
-  passed: boolean;
-  detail: string;
-}
-
 /**
  * Check all prerequisites and report status.
  *
- * Checks:
- *   1. Node.js version >= 22
- *   2. At least one container runtime available
- *   3. CARAPACE_HOME directory structure valid
- *   4. config.toml parses successfully
+ * Delegates to the health-checks module for individual checks, then
+ * displays results with fix suggestions for any failures.
  */
 export async function doctor(deps: CliDeps): Promise<number> {
-  const checks: CheckResult[] = [];
+  const results = await runAllChecks({
+    nodeVersion: deps.nodeVersion,
+    runtimes: deps.runtimes,
+    exec: deps.exec,
+    resolveModule: deps.resolveModule,
+    pluginDirs: deps.pluginDirs,
+    socketPath: deps.socketPath,
+    dirExists: deps.dirExists,
+    isWritable: deps.isWritable,
+  });
 
-  // 1. Node.js version
-  const nodeCheck = checkNodeVersion(deps.nodeVersion);
-  checks.push(nodeCheck);
-  if (nodeCheck.passed) {
-    deps.stdout(`  PASS  Node.js ${deps.nodeVersion}`);
-  } else {
-    deps.stderr(`  FAIL  Node.js >= 22 required (found ${deps.nodeVersion})`);
-  }
-
-  // 2. Container runtime
-  const runtimeCheck = await checkContainerRuntime(deps.runtimes);
-  checks.push(runtimeCheck);
-  if (runtimeCheck.passed) {
-    deps.stdout(`  PASS  Container runtime: ${runtimeCheck.detail}`);
-  } else {
-    deps.stderr(`  FAIL  No container runtime found`);
-  }
-
-  // 3. Directory structure
-  const dirCheck = checkDirectoryStructure(deps);
-  checks.push(dirCheck);
-  if (dirCheck.passed) {
-    deps.stdout(`  PASS  CARAPACE_HOME directory structure (${deps.home})`);
-  } else {
-    deps.stderr(`  FAIL  CARAPACE_HOME: ${dirCheck.detail}`);
-  }
-
-  // 4. Config validation
-  const configCheck = checkConfig(deps);
-  checks.push(configCheck);
-  if (configCheck.passed) {
-    deps.stdout(`  PASS  config.toml valid`);
-  } else {
-    deps.stderr(`  FAIL  config: ${configCheck.detail}`);
+  for (const result of results) {
+    if (result.status === 'pass') {
+      deps.stdout(`  PASS  ${result.label}: ${result.detail}`);
+    } else if (result.status === 'warn') {
+      deps.stderr(`  WARN  ${result.label}: ${result.detail}`);
+      if (result.fix) {
+        deps.stderr(`        Fix: ${result.fix}`);
+      }
+    } else {
+      deps.stderr(`  FAIL  ${result.label}: ${result.detail}`);
+      if (result.fix) {
+        deps.stderr(`        Fix: ${result.fix}`);
+      }
+    }
   }
 
   // Summary
-  const passed = checks.filter((c) => c.passed).length;
-  const total = checks.length;
+  const passed = results.filter((r) => r.status === 'pass').length;
+  const total = results.length;
   const allPassed = passed === total;
 
   deps.stdout(`\n${passed}/${total} checks passed`);
 
   return allPassed ? 0 : 1;
-}
-
-function checkNodeVersion(versionString: string): CheckResult {
-  const match = versionString.match(/^v?(\d+)/);
-  const major = match ? parseInt(match[1], 10) : 0;
-  return {
-    name: 'node-version',
-    passed: major >= 22,
-    detail: versionString,
-  };
-}
-
-async function checkContainerRuntime(runtimes: ContainerRuntime[]): Promise<CheckResult> {
-  for (const rt of runtimes) {
-    try {
-      const available = await rt.isAvailable();
-      if (available) {
-        const version = await rt.version();
-        return {
-          name: 'container-runtime',
-          passed: true,
-          detail: `${rt.name} (${version})`,
-        };
-      }
-    } catch {
-      // Try next runtime
-    }
-  }
-
-  return {
-    name: 'container-runtime',
-    passed: false,
-    detail: 'none',
-  };
-}
-
-function checkDirectoryStructure(deps: CliDeps): CheckResult {
-  try {
-    deps.ensureDirs(deps.home);
-    return { name: 'directory-structure', passed: true, detail: deps.home };
-  } catch (err) {
-    return {
-      name: 'directory-structure',
-      passed: false,
-      detail: err instanceof Error ? err.message : String(err),
-    };
-  }
-}
-
-function checkConfig(deps: CliDeps): CheckResult {
-  try {
-    deps.loadConfig(deps.home);
-    return { name: 'config', passed: true, detail: 'valid' };
-  } catch (err) {
-    return {
-      name: 'config',
-      passed: false,
-      detail: err instanceof Error ? err.message : String(err),
-    };
-  }
 }
 
 // ---------------------------------------------------------------------------

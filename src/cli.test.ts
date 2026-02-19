@@ -39,6 +39,12 @@ function createTestDeps(overrides?: Partial<CliDeps>): CliDeps {
       mutableDirs: [],
       immutableDirs: [],
     }),
+    exec: vi.fn().mockResolvedValue({ stdout: '10.0.0\n', stderr: '' }),
+    resolveModule: vi.fn().mockReturnValue('/path/to/module'),
+    pluginDirs: [],
+    socketPath: '/run/sockets',
+    dirExists: vi.fn().mockReturnValue(true),
+    isWritable: vi.fn().mockReturnValue(true),
     ...overrides,
   };
 }
@@ -134,7 +140,7 @@ describe('doctor', () => {
     const deps = createTestDeps({ nodeVersion: 'v20.1.0' });
     const code = await doctor(deps);
     expect(code).toBe(1);
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Node.js >= 22'));
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('requires >= 22'));
   });
 
   it('reports container runtime availability', async () => {
@@ -154,46 +160,61 @@ describe('doctor', () => {
     expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('No container runtime'));
   });
 
-  it('reports config validation', async () => {
+  it('shows fix suggestions on failure', async () => {
+    const deps = createTestDeps({ nodeVersion: 'v18.0.0' });
+    await doctor(deps);
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Fix:'));
+  });
+
+  it('reports pnpm availability', async () => {
     const deps = createTestDeps();
     const code = await doctor(deps);
     expect(code).toBe(0);
-    expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('config'));
+    expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('pnpm'));
   });
 
-  it('reports config errors gracefully', async () => {
+  it('fails when pnpm is not found', async () => {
     const deps = createTestDeps({
-      loadConfig: vi.fn().mockImplementation(() => {
-        throw new Error('Invalid TOML syntax');
-      }),
+      exec: vi.fn().mockRejectedValue(new Error('not found')),
     });
     const code = await doctor(deps);
     expect(code).toBe(1);
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Invalid TOML syntax'));
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('pnpm'));
   });
 
-  it('reports directory structure check', async () => {
+  it('reports zeromq check', async () => {
     const deps = createTestDeps();
     const code = await doctor(deps);
     expect(code).toBe(0);
-    expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('CARAPACE_HOME'));
+    expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('ZeroMQ'));
   });
 
-  it('reports directory structure errors', async () => {
+  it('reports sqlite check', async () => {
+    const deps = createTestDeps();
+    const code = await doctor(deps);
+    expect(code).toBe(0);
+    expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('SQLite'));
+  });
+
+  it('reports socket path check', async () => {
+    const deps = createTestDeps();
+    const code = await doctor(deps);
+    expect(code).toBe(0);
+    expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('Socket path'));
+  });
+
+  it('fails when socket path is not writable', async () => {
     const deps = createTestDeps({
-      ensureDirs: vi.fn().mockImplementation(() => {
-        throw new Error('Permission denied');
-      }),
+      isWritable: vi.fn().mockReturnValue(false),
     });
     const code = await doctor(deps);
     expect(code).toBe(1);
-    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Permission denied'));
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Socket path'));
   });
 
   it('shows all checks summary', async () => {
     const deps = createTestDeps();
     await doctor(deps);
-    // Should report total checks
     const allCalls = (deps.stdout as ReturnType<typeof vi.fn>).mock.calls.flat();
     const summary = allCalls.find((c: string) => c.includes('checks passed'));
     expect(summary).toBeDefined();
