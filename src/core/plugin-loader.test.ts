@@ -30,7 +30,7 @@ const mockAccess = vi.mocked(access);
 function createMockHandler(overrides?: Partial<PluginHandler>): PluginHandler {
   return {
     initialize: vi.fn(async () => {}),
-    handleRequest: vi.fn(async () => ({ ok: true })),
+    handleToolInvocation: vi.fn(async () => ({ ok: true, result: {} })),
     shutdown: vi.fn(async () => {}),
     ...overrides,
   };
@@ -186,7 +186,13 @@ describe('PluginLoader', () => {
       await loader.loadPlugin('/plugins/beta');
 
       expect(handler.initialize).toHaveBeenCalledTimes(1);
-      expect(handler.initialize).toHaveBeenCalledWith({});
+      expect(handler.initialize).toHaveBeenCalledWith(
+        expect.objectContaining({
+          getAuditLog: expect.any(Function),
+          getToolCatalog: expect.any(Function),
+          getSessionInfo: expect.any(Function),
+        }),
+      );
     });
   });
 

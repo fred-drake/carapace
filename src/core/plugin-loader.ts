@@ -189,9 +189,21 @@ export class PluginLoader {
       };
     }
 
-    // 6. Register tools in catalog
+    // 6. Register tools in catalog — bridge envelope to handleToolInvocation
     for (const tool of manifest.provides.tools) {
-      this.toolCatalog.register(tool, (envelope) => handler.handleRequest(envelope));
+      this.toolCatalog.register(tool, async (envelope) => {
+        const toolName = envelope.topic.replace('tool.invoke.', '');
+        const result = await handler.handleToolInvocation(toolName, envelope.payload.arguments, {
+          group: envelope.group,
+          sessionId: envelope.source,
+          correlationId: envelope.correlation,
+          timestamp: envelope.timestamp,
+        });
+        if (result.ok) {
+          return result.result;
+        }
+        return { error: result.error };
+      });
     }
 
     this.loadedHandlers.set(pluginName, handler);
@@ -277,7 +289,11 @@ export class PluginLoader {
       (handlerModule.default as PluginHandler | undefined) ??
       (handlerModule.handler as PluginHandler | undefined);
 
-    if (!exported || typeof exported.initialize !== 'function') {
+    if (
+      !exported ||
+      typeof exported.initialize !== 'function' ||
+      typeof exported.handleToolInvocation !== 'function'
+    ) {
       throw new Error('Handler module does not export a valid PluginHandler');
     }
 
@@ -289,7 +305,11 @@ export class PluginLoader {
    * error if the timeout expires before initialization completes.
    */
   private async initializeWithTimeout(handler: PluginHandler, pluginName: string): Promise<void> {
-    const services: CoreServices = {};
+    const services: CoreServices = {
+      getAuditLog: async () => [],
+      getToolCatalog: () => this.toolCatalog.list(),
+      getSessionInfo: () => ({ group: '', sessionId: '', startedAt: '' }),
+    };
     await Promise.race([
       handler.initialize(services),
       new Promise<never>((_, reject) =>
