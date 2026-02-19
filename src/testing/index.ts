@@ -40,3 +40,5 @@ export {
   assertErrorResult,
   assertNoCredentialLeak,
 } from './plugin-test-sdk.js';
+
+export { describePluginConformance, type ConformanceOptions } from './conformance.js';
