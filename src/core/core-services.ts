@@ -15,6 +15,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import type { CoreServices, AuditLogFilter, AuditLogEntry, SessionInfo } from './plugin-handler.js';
 import type { AuditLog, AuditEntry, AuditOutcome } from './audit-log.js';
 import type { ToolCatalog } from './tool-catalog.js';
+import type { ToolDeclaration } from '../types/manifest.js';
 
 // ---------------------------------------------------------------------------
 // Request context

@@ -247,6 +247,8 @@ describe('CarapaceConfig type structure', () => {
       runtime: { engine: 'docker' },
       plugins: { dirs: [] },
       security: { max_sessions_per_group: 3 },
+      network: {},
+      logging: { level: 'info' },
       hello: { enabled: true },
     };
     expect(config.runtime.engine).toBe('docker');

@@ -34,8 +34,12 @@ function makeTool(name: string): ToolDeclaration {
   return {
     name,
     description: `Tool ${name}`,
-    risk: 'low' as const,
-    input: { type: 'object' as const, properties: {}, additionalProperties: false },
+    risk_level: 'low' as const,
+    arguments_schema: {
+      type: 'object' as const,
+      properties: {},
+      additionalProperties: false as const,
+    },
   };
 }
 

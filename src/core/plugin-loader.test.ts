@@ -30,7 +30,7 @@ const mockAccess = vi.mocked(access);
 function createMockHandler(overrides?: Partial<PluginHandler>): PluginHandler {
   return {
     initialize: vi.fn(async () => {}),
-    handleToolInvocation: vi.fn(async () => ({ ok: true, result: {} })),
+    handleToolInvocation: vi.fn(async () => ({ ok: true as const, result: {} })),
     shutdown: vi.fn(async () => {}),
     ...overrides,
   };

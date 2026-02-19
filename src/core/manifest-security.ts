@@ -109,7 +109,7 @@ export function validateAdditionalProperties(manifest: PluginManifest): Security
   const errors: string[] = [];
 
   for (const tool of manifest.provides.tools) {
-    const schema = tool.arguments_schema as Record<string, unknown>;
+    const schema = tool.arguments_schema as unknown as Record<string, unknown>;
     if (schema.additionalProperties !== false) {
       errors.push(`Tool "${tool.name}": arguments_schema must have additionalProperties: false`);
     }

@@ -5,6 +5,7 @@ import {
   type ValidationResult,
   type ValidationMessage,
 } from './validate-manifest.js';
+import type { PluginManifest } from './types/manifest.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -20,7 +21,7 @@ function createDeps(overrides?: Partial<ValidateManifestDeps>): ValidateManifest
   };
 }
 
-function validManifest() {
+function validManifest(): PluginManifest {
   return {
     description: 'Weather plugin',
     version: '1.0.0',
@@ -95,7 +96,7 @@ describe('validateManifest — schema validation', () => {
 
   it('reports missing required fields', () => {
     const manifest = validManifest();
-    delete (manifest as Record<string, unknown>).description;
+    delete (manifest as unknown as Record<string, unknown>).description;
     const deps = createDeps({
       readFile: vi.fn().mockReturnValue(JSON.stringify(manifest)),
     });
@@ -120,7 +121,7 @@ describe('validateManifest — schema validation', () => {
 
   it('reports invalid risk_level', () => {
     const manifest = validManifest();
-    (manifest.provides.tools[0] as Record<string, unknown>).risk_level = 'medium';
+    (manifest.provides.tools[0] as unknown as Record<string, unknown>).risk_level = 'medium';
     const deps = createDeps({
       readFile: vi.fn().mockReturnValue(JSON.stringify(manifest)),
     });
@@ -190,7 +191,10 @@ describe('validateManifest — tool name uniqueness', () => {
 describe('validateManifest — additionalProperties enforcement', () => {
   it('reports tools missing additionalProperties: false', () => {
     const manifest = validManifest();
-    const schema = manifest.provides.tools[0].arguments_schema as Record<string, unknown>;
+    const schema = manifest.provides.tools[0].arguments_schema as unknown as Record<
+      string,
+      unknown
+    >;
     delete schema.additionalProperties;
     const deps = createDeps({
       readFile: vi.fn().mockReturnValue(JSON.stringify(manifest)),
@@ -203,8 +207,9 @@ describe('validateManifest — additionalProperties enforcement', () => {
 
   it('reports tools with additionalProperties: true', () => {
     const manifest = validManifest();
-    (manifest.provides.tools[0].arguments_schema as Record<string, unknown>).additionalProperties =
-      true;
+    (
+      manifest.provides.tools[0].arguments_schema as unknown as Record<string, unknown>
+    ).additionalProperties = true;
     const deps = createDeps({
       readFile: vi.fn().mockReturnValue(JSON.stringify(manifest)),
     });
@@ -305,7 +310,7 @@ describe('validateManifest — output', () => {
 
   it('writes individual errors to stderr', () => {
     const manifest = validManifest();
-    delete (manifest as Record<string, unknown>).description;
+    delete (manifest as unknown as Record<string, unknown>).description;
     const deps = createDeps({
       readFile: vi.fn().mockReturnValue(JSON.stringify(manifest)),
     });

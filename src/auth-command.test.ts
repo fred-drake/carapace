@@ -1,10 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import {
-  runAuthApiKey,
-  runAuthLogin,
-  runAuthStatus,
-  type AuthDeps,
-} from './auth-command.js';
+import { runAuthApiKey, runAuthLogin, runAuthStatus, type AuthDeps } from './auth-command.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
