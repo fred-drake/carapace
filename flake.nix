@@ -41,6 +41,9 @@
             # Utilities
             jq
             curl
+
+            # Github
+            gh
           ];
 
           shellHook = ''

@@ -20,6 +20,7 @@ backbone, core routing, test infrastructure, and CI pipeline that everything els
 depends on.
 
 ### ARCH-01: Bootstrap project structure
+
 **Role**: Architect / Engineer
 **Description**: Initialize package.json, tsconfig.json (strict mode), pnpm workspace
 config, and directory layout: `src/core/`, `src/ipc/`, `src/plugins/`, `src/types/`,
@@ -30,6 +31,7 @@ files. TypeScript strict mode enabled. ESM module system configured.
 **Complexity**: S
 
 ### ARCH-02: Define message envelope types
+
 **Role**: Architect / Engineer
 **Description**: Create TypeScript interfaces for the full message protocol:
 `WireMessage` (topic, correlation, arguments), `Envelope` (id, version, type, topic,
@@ -46,6 +48,7 @@ metadata where applicable.
 **Complexity**: M
 
 ### ARCH-03: Define plugin manifest schema and types
+
 **Role**: Architect / Engineer
 **Description**: Create TypeScript interfaces and JSON Schema for plugin manifests:
 tool declarations (name, description, risk_level, argument schema), hook subscriptions,
@@ -57,6 +60,7 @@ rejected with clear errors. TypeScript types match the JSON Schema.
 **Complexity**: M
 
 ### ENG-01: Implement ZeroMQ PUB/SUB event bus
+
 **Role**: Engineer
 **Description**: Build the event bus using ZeroMQ PUB/SUB pattern over Unix domain
 sockets. Core runs a PUB socket; plugins and container subscribe by topic prefix.
@@ -71,6 +75,7 @@ clean (no lingering files).
 **Complexity**: M
 
 ### ENG-02: Implement ZeroMQ ROUTER/DEALER request channel
+
 **Role**: Engineer
 **Description**: Build the request-response channel using ZeroMQ ROUTER/DEALER pattern.
 Core runs ROUTER; agent and plugins connect as DEALERs. Core routes requests by topic
@@ -84,6 +89,7 @@ concurrent requests are handled correctly.
 **Complexity**: L
 
 ### ENG-03: Implement core message router
+
 **Role**: Engineer
 **Description**: Build the central router that receives messages from both channels,
 constructs full envelopes from wire messages (adding id, version, type, source, group,
@@ -102,6 +108,7 @@ pipeline stages is independently testable.
 **Complexity**: L
 
 ### ENG-04: Implement plugin loader
+
 **Role**: Engineer
 **Description**: Build the filesystem-based plugin discovery and loading system. Scan
 `plugins/` directory at startup, parse and validate each manifest.json, instantiate
@@ -119,6 +126,7 @@ are excluded from catalog, not from the system.
 **Complexity**: L
 
 ### QA-01: Set up test framework
+
 **Role**: QA
 **Description**: Configure Vitest with TypeScript support, path alias resolution
 matching tsconfig, and coverage reporting (v8 provider). Set up test directory
@@ -132,6 +140,7 @@ integration-tagged tests only. Vitest config handles TypeScript and path aliases
 **Complexity**: S
 
 ### QA-02: Build test fixtures and factories
+
 **Role**: QA
 **Description**: Create factory functions for common test objects: `createWireMessage()`,
 `createEnvelope()`, `createManifest()`, `createPluginConfig()`, `createTestDatabase()`
@@ -145,6 +154,7 @@ at compile time. SQLite test helpers create in-memory DBs with migrations applie
 **Complexity**: S
 
 ### QA-03: Build ZeroMQ mock infrastructure
+
 **Role**: QA
 **Description**: Create mock/fake ZeroMQ sockets for unit testing: `FakePubSocket`,
 `FakeSubSocket`, `FakeRouterSocket`, `FakeDealerSocket`. These capture sent messages
@@ -158,6 +168,7 @@ zeromq.js closely enough that tests are meaningful.
 **Complexity**: M
 
 ### QA-09: Build mock container runtime
+
 **Role**: QA
 **Description**: Create a mock container runtime for testing session manager (ENG-06),
 container lifecycle manager (DEVOPS-03), and container-related code without Docker.
@@ -171,6 +182,7 @@ Cleanup verification confirms no leaked resources.
 **Complexity**: M
 
 ### QA-10: Build IPC binary test harness
+
 **Role**: QA
 **Description**: Create a test harness specifically for the `ipc` binary (ENG-05). The
 binary is the container's sole communication channel — it must be thoroughly tested.
@@ -184,6 +196,7 @@ against ARCH-02 types.
 **Complexity**: S
 
 ### DEVOPS-01: Create container Dockerfile
+
 **Role**: DevOps
 **Description**: Build a multi-stage Dockerfile for the agent container. Build stage
 compiles the `ipc` binary from TypeScript. Runtime stage uses Node.js 22 base with
@@ -199,6 +212,7 @@ versioning strategy.
 **Complexity**: M
 
 ### DEVOPS-02: Configure CI pipeline
+
 **Role**: DevOps
 **Description**: Set up GitHub Actions CI with a multi-stage pipeline designed for
 fast feedback first, security scanning second, integration tests last. See the
@@ -219,6 +233,7 @@ These tasks build on the foundation to deliver a working system that can run an 
 session end-to-end, with full validation, error handling, and testing.
 
 ### ENG-05: Build IPC binary (container-side CLI)
+
 **Role**: Engineer
 **Description**: Implement the `ipc` CLI tool that runs inside the container. It
 accepts tool invocation arguments from Claude Code (via Bash), constructs a wire
@@ -237,6 +252,7 @@ invocation. Timeout on no response. Exit codes reflect success/failure.
 **Complexity**: M
 
 ### ENG-06: Implement session manager
+
 **Role**: Engineer
 **Description**: Build the session manager that tracks active agent sessions: which
 container is running, which group it belongs to, session start time, and the ZeroMQ
@@ -251,6 +267,7 @@ for different groups are isolated.
 **Complexity**: M
 
 ### ENG-07: Implement schema validation engine
+
 **Role**: Engineer
 **Description**: Build a validation layer that validates tool arguments against their
 declared JSON Schemas (from plugin manifests). Enforce `additionalProperties: false`
@@ -266,6 +283,7 @@ Prototype pollution keys are safely handled.
 **Complexity**: M
 
 ### ENG-08: Implement SQLite data layer
+
 **Role**: Engineer
 **Description**: Build the SQLite connection manager and migration system. Support
 per-feature, per-group databases at `data/{feature}/{group}.sqlite`. Migrations are
@@ -282,6 +300,7 @@ are rejected.
 **Complexity**: M
 
 ### ENG-09: Build skill file loader
+
 **Role**: Engineer
 **Description**: Implement the system that reads container-side skill markdown files
 from `plugins/{name}/skills/` and prepares them for injection into the container's
@@ -296,6 +315,7 @@ crashes. Intrinsic tool skills are auto-generated.
 **Complexity**: S
 
 ### ENG-14: Implement core intrinsic tools
+
 **Role**: Engineer
 **Description**: Implement the three core intrinsic tools documented in ARCHITECTURE.md:
 `get_diagnostics` (query session-scoped audit log by correlation ID or recent errors),
@@ -314,6 +334,7 @@ queries audit log entries. Tools pass full validation pipeline.
 **Complexity**: M
 
 ### ENG-15: Implement user confirmation gate (Stage 5)
+
 **Role**: Engineer
 **Description**: Build the user confirmation mechanism for `risk_level: "high"` tools.
 When a tool invocation reaches Stage 5 of the validation pipeline, the core pauses
@@ -331,6 +352,7 @@ Timed-out requests return `CONFIRMATION_TIMEOUT`. Low-risk tools bypass this sta
 **Complexity**: L
 
 ### ENG-16: Implement core services interface
+
 **Role**: Engineer
 **Description**: Build the `CoreServices` interface that plugin handlers receive during
 `initialize()`: `getAuditLog(filters)`, `getToolCatalog()`, `getSessionInfo()`.
@@ -347,6 +369,7 @@ returns entries from other groups. TypeScript provides full autocomplete.
 **Complexity**: M
 
 ### ENG-17: Implement audit log subsystem
+
 **Role**: Engineer
 **Description**: Build the host-side audit log system. Structured JSON Lines format,
 one object per line. Each entry includes: timestamp, group, source, topic, correlation,
@@ -365,6 +388,7 @@ ID for `get_diagnostics`.
 **Complexity**: M
 
 ### ENG-18: Implement ToolError class and error response handling
+
 **Role**: Engineer
 **Description**: Implement the `ToolError` class exported from `@carapace/sdk`. Build
 the core's error discrimination logic: return values → success response, `ToolError`
@@ -385,6 +409,7 @@ include correct metadata (`retriable`, `stage`, `field`, `retry_after`).
 **Complexity**: M
 
 ### ENG-19: Implement event-to-agent decision logic
+
 **Role**: Engineer
 **Description**: Build the core's logic for deciding when PUB/SUB events warrant
 spawning a new agent container. `message.inbound` events spawn an agent if the group
@@ -402,6 +427,7 @@ are logged and dropped. Concurrent session policy is configurable.
 **Complexity**: M
 
 ### SEC-01: Implement host-side message validation
+
 **Role**: Security
 **Description**: Build the validation pipeline that every message from the container
 passes through: schema validation (JSON Schema), topic whitelist check (only declared
@@ -418,10 +444,11 @@ sessions receive throttle errors. All rejections are logged with stage and reaso
 **Complexity**: L
 
 ### SEC-02: Implement response sanitization
+
 **Role**: Security
 **Description**: Build a sanitization pass that scrubs plugin responses before they're
 forwarded to the container. Strip common credential patterns: Bearer tokens, API keys
-(X-API-Key, sk-*, etc.), OAuth tokens, connection strings. Implement as part of the
+(X-API-Key, sk-\*, etc.), OAuth tokens, connection strings. Implement as part of the
 3-stage Response Path: Sanitize → Log → Forward. Defense-in-depth against plugin
 authors accidentally leaking secrets.
 **Dependencies**: ENG-03, ENG-17
@@ -433,6 +460,7 @@ events are logged for audit. Full Response Path (Sanitize → Log → Forward) w
 **Complexity**: M
 
 ### SEC-03: Implement rate limiter
+
 **Role**: Security
 **Description**: Build a per-session and per-group rate limiter for tool invocations.
 Configurable limits (requests per minute, burst size). Token bucket or sliding window
@@ -447,10 +475,11 @@ correctly. Rate limit state resets on session teardown.
 **Complexity**: M
 
 ### SEC-07: Implement container security verification
+
 **Role**: Security / DevOps
 **Description**: Verify that the built container enforces all security constraints
 claimed in the architecture. Distinct from DEVOPS-01 (which builds it) — this task
-*validates* it. Tests verify: (1) root filesystem is read-only, (2) no network access
+_validates_ it. Tests verify: (1) root filesystem is read-only, (2) no network access
 (attempt DNS, HTTP, raw socket), (3) only `ipc` binary is executable, (4)
 settings.json is read-only, (5) skill files and CLAUDE.md are read-only, (6) writable
 mounts limited to workspace, `.claude/` session dirs, and ZeroMQ socket, (7) no
@@ -463,6 +492,7 @@ in CI. Any regression in container security is immediately caught.
 **Complexity**: M
 
 ### SEC-08: Implement message size limits and DoS prevention
+
 **Role**: Security / Engineer
 **Description**: Implement and test message size limits at the trust boundary: (1)
 maximum wire message size (reject before JSON parsing to prevent memory exhaustion),
@@ -478,6 +508,7 @@ Tests cover boundary conditions.
 **Complexity**: M
 
 ### SEC-10: Implement plugin manifest security validation
+
 **Role**: Security
 **Description**: Security-harden the manifest loading process beyond ARCH-03's schema
 validation: (1) validate all `arguments_schema` objects contain
@@ -494,6 +525,7 @@ schemas are detected. Tests cover each vector.
 **Complexity**: M
 
 ### DEVOPS-03: Implement container lifecycle manager
+
 **Role**: DevOps
 **Description**: Build the system that spawns agent containers on demand, manages
 their lifecycle (start → running → shutdown), handles graceful and forced termination,
@@ -508,6 +540,7 @@ logs are captured. Stale/orphaned containers are detected and cleaned on startup
 **Complexity**: L
 
 ### DEVOPS-04: Implement ZeroMQ socket provisioning
+
 **Role**: DevOps
 **Description**: Build the system that creates, configures, and manages ZeroMQ Unix
 domain sockets. Handle socket file creation, permissions, cleanup on shutdown, and
@@ -520,6 +553,7 @@ startup. Socket paths are configurable. Collisions for concurrent sessions are h
 **Complexity**: M
 
 ### DEVOPS-07: Create Docker Compose for local development
+
 **Role**: DevOps
 **Description**: Create a `docker-compose.yml` that orchestrates the host core process
 and agent container for local testing. Developers need a one-command way to spin up the
@@ -532,6 +566,7 @@ network access. Developer can observe message flow.
 **Complexity**: S
 
 ### DEVOPS-08: Add container build and scan to CI
+
 **Role**: DevOps
 **Description**: Extend CI pipeline to build the container image, scan it for OS-level
 vulnerabilities (Trivy), and run a container smoke test (starts, filesystem is
@@ -544,6 +579,7 @@ findings block merge.
 **Complexity**: M
 
 ### DEVOPS-10: Implement container permission lockdown (Layer 2)
+
 **Role**: DevOps
 **Description**: Generate and mount the Claude Code `settings.json` file as a read-only
 overlay in the container at `/home/node/.claude/settings.json`. This file restricts
@@ -558,6 +594,7 @@ subdirectories for session data are writable.
 **Complexity**: M
 
 ### DX-01: Define plugin handler interface
+
 **Role**: DX Advocate
 **Description**: Design and implement the TypeScript interface that all plugin handlers
 must implement: `init(services: CoreServices)`, `handleToolInvocation(tool, args,
@@ -572,6 +609,7 @@ message template is documented and enforced.
 **Complexity**: M
 
 ### DX-02: Build CLI entry point
+
 **Role**: DX Advocate
 **Description**: Implement the main `carapace` CLI with subcommands: `start` (launch
 core + container), `stop` (graceful shutdown), `status` (show running sessions),
@@ -584,6 +622,7 @@ missing dependencies.
 **Complexity**: M
 
 ### DX-06: Build plugin test SDK
+
 **Role**: DX Advocate
 **Description**: Build a lightweight SDK for plugin authors to unit test their handlers
 in isolation — no ZeroMQ, no running core, no containers. Includes:
@@ -598,6 +637,7 @@ write a handler unit test in under 20 lines. No real ZeroMQ or core process need
 **Complexity**: M
 
 ### QA-04: Build integration test harness
+
 **Role**: QA
 **Description**: Create a test harness that spins up real ZeroMQ sockets (in-process,
 not Docker) for integration testing. Support sending wire messages and asserting on
@@ -614,6 +654,7 @@ Tests run in CI without Docker.
 **Complexity**: L
 
 ### QA-05: Build plugin conformance test suite
+
 **Role**: QA
 **Description**: Create a reusable test suite that validates any plugin against its
 manifest contract. Verify: manifest parses correctly, declared tools are callable, tool
@@ -633,6 +674,7 @@ These tasks add the first real plugin, developer tooling, security hardening,
 adversarial testing, and the Claude Code e2e test infrastructure.
 
 ### ENG-10: Implement memory plugin — data layer
+
 **Role**: Engineer
 **Description**: Build the SQLite schema and data access layer for the memory plugin:
 entries table (typed: preference, fact, instruction, context, correction), FTS5
@@ -650,6 +692,7 @@ runs during `initialize()`. Group name validation enforced at DB path constructi
 **Complexity**: M
 
 ### ENG-11: Implement memory plugin — tool handlers
+
 **Role**: Engineer
 **Description**: Build the four memory tool handlers: `memory_store` (create entry),
 `memory_search` (FTS5 query), `memory_brief` (summarize recent/relevant entries for
@@ -666,6 +709,7 @@ derived from `type` (never agent-supplied). Provenance fields populated from env
 **Complexity**: L
 
 ### ENG-12: Implement memory plugin — skill file
+
 **Role**: Engineer
 **Description**: Write the container-side skill markdown file that teaches Claude about
 the memory tools. Document each tool's purpose, arguments, examples, and when to use
@@ -678,6 +722,7 @@ this skill file.
 **Complexity**: S
 
 ### ENG-13: Implement memory brief hook
+
 **Role**: Engineer
 **Description**: Build the event-driven hook that fires on `agent.started` events.
 When a new session begins, the memory plugin automatically runs `memory_brief` and
@@ -698,6 +743,7 @@ excluded.
 **Complexity**: M
 
 ### SEC-04: Implement group-level authorization
+
 **Role**: Security
 **Description**: Build the authorization layer that ensures plugins only receive
 messages for their authorized groups. The core checks the session's group against the
@@ -710,6 +756,7 @@ attempts are logged with full context.
 **Complexity**: M
 
 ### SEC-05: Build security test suite
+
 **Role**: Security / QA
 **Description**: Create a dedicated security test suite covering: wire format fuzzing,
 identity spoofing attempts, cross-group access, rate limit boundary testing, credential
@@ -728,6 +775,7 @@ sessions proven isolated. Tests run in CI on every push.
 **Complexity**: L
 
 ### SEC-06: Implement memory entry security model
+
 **Role**: Security
 **Description**: Build the untrusted-by-default model for memory entries: behavioral
 flags (derived from `type`, not agent-supplied), provenance tracking (immutable after
@@ -744,6 +792,7 @@ chain depth is bounded. Wire format cannot influence behavioral flag.
 **Complexity**: M
 
 ### SEC-09: Implement supply chain security pipeline
+
 **Role**: Security / DevOps
 **Description**: Integrate dependency and supply chain security into CI: (1) `pnpm
 audit --audit-level=high` on every push, (2) Socket.dev for supply chain risk
@@ -757,6 +806,7 @@ Lockfile integrity is verified.
 **Complexity**: M
 
 ### SEC-11: Implement SQLite and FTS5 injection testing
+
 **Role**: Security / QA
 **Description**: Verify that all SQLite operations use parameterized queries and cannot
 be injected. FTS5 has its own query syntax — test: (1) SQL injection through memory
@@ -770,6 +820,7 @@ validation rejects traversal patterns. Tests cover each vector.
 **Complexity**: M
 
 ### SEC-12: Build adversarial e2e security test framework
+
 **Role**: Security / QA
 **Description**: Build a framework for adversarial e2e testing that exercises the full
 attack surface through real agent sessions. Scenarios: (1) prompt injection via inbound
@@ -786,6 +837,7 @@ on merge to main.
 **Complexity**: XL
 
 ### SEC-13: Implement audit log integrity and security
+
 **Role**: Security
 **Description**: Secure the audit log itself: (1) append-only (no modification/deletion
 by plugins or handlers), (2) log entries include sequence numbers to detect tampering,
@@ -799,6 +851,7 @@ Tests verify log integrity under normal and adversarial conditions.
 **Complexity**: M
 
 ### SEC-14: Write custom Semgrep SAST rules
+
 **Role**: Security / DevOps
 **Description**: Write Carapace-specific Semgrep rules that encode security invariants
 as code: (1) `no-identity-in-wire-format` — flag reading source/group/id from wire
@@ -815,6 +868,7 @@ via inline comments.
 **Complexity**: M
 
 ### DEVOPS-05: Implement health check system
+
 **Role**: DevOps
 **Description**: Build `carapace doctor` that checks: Node.js version, pnpm
 availability, Docker running, ZeroMQ library installed, SQLite available, plugin
@@ -827,6 +881,7 @@ Works on macOS and Linux.
 **Complexity**: M
 
 ### DEVOPS-06: Implement log aggregation
+
 **Role**: DevOps
 **Description**: Build structured logging for the core, plugins, and container output.
 JSON-formatted logs with level, timestamp, component, and message. Route container
@@ -838,6 +893,7 @@ include component identification.
 **Complexity**: M
 
 ### DEVOPS-09: Add Nix build output for host binary
+
 **Role**: DevOps
 **Description**: Extend `flake.nix` to include a `packages.default` output that builds
 the host-side TypeScript into a deployable artifact (compiled JS + node_modules).
@@ -849,6 +905,7 @@ compiled JS and pinned dependencies. Build is reproducible.
 **Complexity**: M
 
 ### DEVOPS-11: Implement e2e test CI infrastructure
+
 **Role**: DevOps / QA
 **Description**: Build CI infrastructure for running Claude Code e2e tests: nightly
 scheduled workflow, token/cost budget caps per run, result categorization (PASS,
@@ -862,6 +919,7 @@ Alert fires if pass rate drops below threshold for N consecutive runs.
 **Complexity**: L
 
 ### DX-03: Build plugin scaffolding CLI
+
 **Role**: DX Advocate
 **Description**: Add `carapace plugin create <name>` command that generates a new
 plugin skeleton: `manifest.json` with placeholder tools, `handler.ts` with the
@@ -874,6 +932,7 @@ test uses plugin test SDK and runs (fails per TDD — ready for implementation).
 **Complexity**: M
 
 ### DX-04: Build message tracing / debug mode
+
 **Role**: DX Advocate
 **Description**: Add a debug mode that logs all messages flowing through the system:
 wire messages received, envelopes constructed, routing decisions, plugin dispatch,
@@ -885,6 +944,7 @@ by topic or plugin.
 **Complexity**: M
 
 ### DX-05: Write plugin authoring guide
+
 **Role**: DX Advocate
 **Description**: Create comprehensive documentation for plugin authors: manifest format
 reference, handler interface guide, skill file conventions, testing guide (unit via
@@ -897,6 +957,7 @@ error cases, debugging, and the full testing pyramid for plugins.
 **Complexity**: M
 
 ### DX-07: Implement plugin hot reload / watch mode
+
 **Role**: DX Advocate
 **Description**: Add `carapace start --watch` that monitors `plugins/` for file
 changes. On change: re-validate manifest, re-compile handler, re-register tools in
@@ -908,6 +969,7 @@ crashing the system.
 **Complexity**: M
 
 ### DX-08: Build manifest validation CLI command
+
 **Role**: DX Advocate
 **Description**: Add standalone `carapace plugin validate [path]` that validates a
 manifest without starting the system. Checks: JSON syntax, schema validity, tool name
@@ -920,6 +982,7 @@ running core.
 **Complexity**: S
 
 ### QA-06: Build container lifecycle integration tests
+
 **Role**: QA
 **Description**: Create integration tests that exercise the full container lifecycle:
 spawn container, establish ZeroMQ connection, send tool invocations, receive responses,
@@ -933,6 +996,7 @@ Tests clean up all containers on failure.
 **Complexity**: L
 
 ### QA-07: Implement coverage reporting and gates
+
 **Role**: QA
 **Description**: Configure coverage collection (v8 via Vitest), set minimum coverage
 thresholds, and add coverage gates to CI that block merges below thresholds. Generate
@@ -945,6 +1009,7 @@ generated for local review. Coverage excludes test files and type definitions.
 **Complexity**: S
 
 ### QA-08: Build Claude Code e2e test infrastructure
+
 **Role**: QA
 **Description**: Build the test runner infrastructure for end-to-end tests driven by
 Claude Code as an actual AI agent. These tests are non-deterministic — Claude Code
@@ -956,6 +1021,7 @@ returned"), deterministic mock plugins with known behavior, timeout/retry logic 
 flaky tests, structured test result collection and reporting, cost tracking per test.
 
 **E2E test scenarios (minimum 10):**
+
 1. Happy path tool invocation — agent calls tool, gets result
 2. Multi-tool session — agent chains multiple tool calls
 3. Error handling — agent receives VALIDATION_FAILED, responds appropriately
@@ -975,6 +1041,7 @@ CI-reportable. Flaky test tolerance: tests pass 90%+ of runs.
 **Complexity**: XL
 
 ### QA-11: Build performance benchmark suite
+
 **Role**: QA
 **Description**: Build performance benchmarks for critical paths: ZeroMQ message
 throughput (messages/second through full pipeline), SQLite query latency (FTS5 search,
@@ -1046,24 +1113,24 @@ regressions.
 
 ### Quality Gates Summary
 
-| Gate | Tool | Threshold | Blocks Merge |
-|------|------|-----------|:------------:|
-| Lint | oxlint | Zero errors | Yes |
-| Format | prettier | All files pass | Yes |
-| Types | tsc --noEmit | Zero errors | Yes |
-| Deps | pnpm audit | Zero high/critical | Yes |
-| Unit tests | vitest | 100% pass | Yes |
-| Coverage (global) | v8 | 80% line, 70% branch | Yes |
-| Coverage (security) | v8 | 90% line, 80% branch | Yes |
-| Semgrep | custom rules | Zero high/critical | Yes |
-| CodeQL | github-native | Zero high/critical | Yes |
-| Integration tests | vitest | 100% pass | Yes |
-| Security tests | vitest | 100% pass | Yes |
-| Container scan | Trivy | Zero high/critical | Yes (on main) |
-| Container tests | vitest | 100% pass | Yes (on main) |
-| E2E tests | Claude Code | 90% pass rate | Yes (on main) |
-| Supply chain | Socket.dev | Advisory | No |
-| OpenSSF | Scorecard | Score > 7 | No |
+| Gate                | Tool          | Threshold            | Blocks Merge  |
+| ------------------- | ------------- | -------------------- | :-----------: |
+| Lint                | oxlint        | Zero errors          |      Yes      |
+| Format              | prettier      | All files pass       |      Yes      |
+| Types               | tsc --noEmit  | Zero errors          |      Yes      |
+| Deps                | pnpm audit    | Zero high/critical   |      Yes      |
+| Unit tests          | vitest        | 100% pass            |      Yes      |
+| Coverage (global)   | v8            | 80% line, 70% branch |      Yes      |
+| Coverage (security) | v8            | 90% line, 80% branch |      Yes      |
+| Semgrep             | custom rules  | Zero high/critical   |      Yes      |
+| CodeQL              | github-native | Zero high/critical   |      Yes      |
+| Integration tests   | vitest        | 100% pass            |      Yes      |
+| Security tests      | vitest        | 100% pass            |      Yes      |
+| Container scan      | Trivy         | Zero high/critical   | Yes (on main) |
+| Container tests     | vitest        | 100% pass            | Yes (on main) |
+| E2E tests           | Claude Code   | 90% pass rate        | Yes (on main) |
+| Supply chain        | Socket.dev    | Advisory             |      No       |
+| OpenSSF             | Scorecard     | Score > 7            |      No       |
 
 ---
 
@@ -1160,6 +1227,7 @@ ENG-11 (memory tools) ──→ QA-08 (Claude Code e2e)
 ```
 
 ### Shortest Path to Working System
+
 1. ARCH-01 → ARCH-02 → ENG-01 + ENG-02 → ENG-03 + ENG-05 (parallel) → ENG-04 +
    ENG-06 → DEVOPS-03
 2. This gets you: project structure → message types → both ZeroMQ channels → router +
@@ -1167,7 +1235,9 @@ ENG-11 (memory tools) ──→ QA-08 (Claude Code e2e)
    agent that can invoke tools**
 
 ### Parallel Work Streams from ARCH-01
+
 These can all start immediately after ARCH-01:
+
 - ARCH-02 + ARCH-03 (types and schemas)
 - QA-01 + QA-03 + QA-09 + QA-10 (test infrastructure)
 - DEVOPS-01 + DEVOPS-02 (container + CI)
@@ -1177,12 +1247,12 @@ These can all start immediately after ARCH-01:
 
 ## Task Summary
 
-| Category | Count | P0 | P1 | P2 |
-|----------|------:|---:|---:|---:|
-| ARCH | 3 | 3 | 0 | 0 |
-| ENG | 19 | 4 | 9 | 6 |
-| SEC | 14 | 0 | 5 | 9 |
-| DEVOPS | 11 | 2 | 5 | 4 |
-| DX | 8 | 0 | 3 | 5 |
-| QA | 11 | 5 | 2 | 4 |
+| Category  |  Count |     P0 |     P1 |     P2 |
+| --------- | -----: | -----: | -----: | -----: |
+| ARCH      |      3 |      3 |      0 |      0 |
+| ENG       |     19 |      4 |      9 |      6 |
+| SEC       |     14 |      0 |      5 |      9 |
+| DEVOPS    |     11 |      2 |      5 |      4 |
+| DX        |      8 |      0 |      3 |      5 |
+| QA        |     11 |      5 |      2 |      4 |
 | **Total** | **66** | **14** | **24** | **28** |

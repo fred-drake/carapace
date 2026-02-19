@@ -171,14 +171,14 @@ Without it, any web-based task requires the user to do it manually.
 
 **Proposed tools:**
 
-| Tool | Risk Level | Description |
-|------|-----------|-------------|
-| `browser_navigate` | low | Navigate to a URL |
-| `browser_snapshot` | low | Take a screenshot or extract page content |
-| `browser_click` | low | Click an element by selector |
-| `browser_type` | low | Type text into a form field |
-| `browser_execute` | high | Execute arbitrary JavaScript on page |
-| `browser_upload` | high | Upload a file to a form field |
+| Tool               | Risk Level | Description                               |
+| ------------------ | ---------- | ----------------------------------------- |
+| `browser_navigate` | low        | Navigate to a URL                         |
+| `browser_snapshot` | low        | Take a screenshot or extract page content |
+| `browser_click`    | low        | Click an element by selector              |
+| `browser_type`     | low        | Type text into a form field               |
+| `browser_execute`  | high       | Execute arbitrary JavaScript on page      |
+| `browser_upload`   | high       | Upload a file to a form field             |
 
 **Security considerations:**
 
@@ -230,13 +230,13 @@ weekly goals."
 
 **Proposed tools:**
 
-| Tool | Risk Level | Description |
-|------|-----------|-------------|
-| `directive_create` | high | Create a new persistent directive |
-| `directive_list` | low | List active directives |
-| `directive_update` | high | Modify an existing directive |
-| `directive_delete` | high | Cancel a directive |
-| `directive_history` | low | View execution history for a directive |
+| Tool                | Risk Level | Description                            |
+| ------------------- | ---------- | -------------------------------------- |
+| `directive_create`  | high       | Create a new persistent directive      |
+| `directive_list`    | low        | List active directives                 |
+| `directive_update`  | high       | Modify an existing directive           |
+| `directive_delete`  | high       | Cancel a directive                     |
+| `directive_history` | low        | View execution history for a directive |
 
 **Security considerations:**
 
@@ -254,7 +254,7 @@ weekly goals."
 **Relationship to existing `task.triggered`:**
 
 Carapace already has `task.triggered` events in the event bus, but the
-mechanism for *creating* and *managing* scheduled tasks is not documented.
+mechanism for _creating_ and _managing_ scheduled tasks is not documented.
 Persistent directives formalize this: the directives plugin is the
 authoring interface, and `task.triggered` is the execution mechanism.
 
@@ -347,14 +347,14 @@ events, and tracking usage costs.
 
 **Proposed views:**
 
-| View | Data Source | Purpose |
-|------|-----------|---------|
-| Session Monitor | Core session state | Active/recent sessions, duration, status |
-| Plugin Health | Startup state + heartbeats | Which plugins loaded, which failed |
-| Audit Log | `data/audit/` | Searchable, filterable event log |
-| Usage Dashboard | `data/usage/` | Token counts, costs, trends over time |
-| Directives | `data/directives/` | Active directives, execution history |
-| Memory Browser | `data/memory/` | Browse/search memory entries |
+| View            | Data Source                | Purpose                                  |
+| --------------- | -------------------------- | ---------------------------------------- |
+| Session Monitor | Core session state         | Active/recent sessions, duration, status |
+| Plugin Health   | Startup state + heartbeats | Which plugins loaded, which failed       |
+| Audit Log       | `data/audit/`              | Searchable, filterable event log         |
+| Usage Dashboard | `data/usage/`              | Token counts, costs, trends over time    |
+| Directives      | `data/directives/`         | Active directives, execution history     |
+| Memory Browser  | `data/memory/`             | Browse/search memory entries             |
 
 **Security considerations:**
 
@@ -398,11 +398,11 @@ Single-agent-at-a-time limits Carapace to sequential workflows.
 
 **Proposed tools (core intrinsic):**
 
-| Tool | Risk Level | Description |
-|------|-----------|-------------|
-| `sessions_list` | low | Discover active sessions in this group |
-| `sessions_send` | low | Send a message to another session |
-| `sessions_receive` | low | Check for incoming messages |
+| Tool               | Risk Level | Description                            |
+| ------------------ | ---------- | -------------------------------------- |
+| `sessions_list`    | low        | Discover active sessions in this group |
+| `sessions_send`    | low        | Send a message to another session      |
+| `sessions_receive` | low        | Check for incoming messages            |
 
 **Security considerations:**
 
@@ -514,14 +514,14 @@ important for mobile interactions where the user can't open a terminal.
 
 **Proposed commands:**
 
-| Command | Description | Data Source |
-|---------|-----------|-------------|
-| `/status` | Show model, session duration, token count | `get_session_info` + `get_usage` |
-| `/reset` | Clear conversation context, start fresh | Core session reset |
-| `/usage` | Show token counts and estimated cost | `get_usage` |
-| `/compact` | Summarize and compress context window | Agent-side context management |
-| `/cancel` | Abort current agent operation | Core session cancellation |
-| `/help` | List available commands | Channel plugin local |
+| Command    | Description                               | Data Source                      |
+| ---------- | ----------------------------------------- | -------------------------------- |
+| `/status`  | Show model, session duration, token count | `get_session_info` + `get_usage` |
+| `/reset`   | Clear conversation context, start fresh   | Core session reset               |
+| `/usage`   | Show token counts and estimated cost      | `get_usage`                      |
+| `/compact` | Summarize and compress context window     | Agent-side context management    |
+| `/cancel`  | Abort current agent operation             | Core session cancellation        |
+| `/help`    | List available commands                   | Channel plugin local             |
 
 **Security considerations:**
 
@@ -563,18 +563,18 @@ missing credentials, stale sockets.
 
 **Proposed checks:**
 
-| Check | Severity | Description |
-|-------|---------|-------------|
-| Container runtime | error | Docker/Podman available and responsive |
-| ZeroMQ socket path | error | Socket directory exists and is writable |
-| Plugin manifests | error | All manifests parse, no tool name collisions |
-| Plugin dependencies | warning | External services reachable (APIs, DBs) |
-| Security config | warning | No overly permissive group policies |
-| Credential store | warning | Referenced credentials exist |
-| Disk space | warning | Sufficient space for audit logs and data |
-| Port availability | error | Webhook/dashboard ports not in use |
-| Container image | error | Required image exists and is pullable |
-| Socket cleanup | warning | No stale socket files from crashed sessions |
+| Check               | Severity | Description                                  |
+| ------------------- | -------- | -------------------------------------------- |
+| Container runtime   | error    | Docker/Podman available and responsive       |
+| ZeroMQ socket path  | error    | Socket directory exists and is writable      |
+| Plugin manifests    | error    | All manifests parse, no tool name collisions |
+| Plugin dependencies | warning  | External services reachable (APIs, DBs)      |
+| Security config     | warning  | No overly permissive group policies          |
+| Credential store    | warning  | Referenced credentials exist                 |
+| Disk space          | warning  | Sufficient space for audit logs and data     |
+| Port availability   | error    | Webhook/dashboard ports not in use           |
+| Container image     | error    | Required image exists and is pullable        |
+| Socket cleanup      | warning  | No stale socket files from crashed sessions  |
 
 **Source:**
 OpenClaw provides `openclaw doctor` which surfaces risky or misconfigured
@@ -614,13 +614,13 @@ significantly less accessible than one that can be spoken to.
 
 **Components:**
 
-| Component | Runs On | Technology Options |
-|-----------|---------|-------------------|
-| Wake word detection | Host | Porcupine, Snowboy, or built-in OS |
-| Speech-to-text | Host or API | Whisper (local), Deepgram, Google STT |
-| Text-to-speech | Host or API | ElevenLabs, Coqui TTS, macOS `say` |
-| Audio capture | Host | PortAudio, macOS Core Audio |
-| Audio playback | Host | System audio output |
+| Component           | Runs On     | Technology Options                    |
+| ------------------- | ----------- | ------------------------------------- |
+| Wake word detection | Host        | Porcupine, Snowboy, or built-in OS    |
+| Speech-to-text      | Host or API | Whisper (local), Deepgram, Google STT |
+| Text-to-speech      | Host or API | ElevenLabs, Coqui TTS, macOS `say`    |
+| Audio capture       | Host        | PortAudio, macOS Core Audio           |
+| Audio playback      | Host        | System audio output                   |
 
 **Security considerations:**
 
@@ -667,14 +667,14 @@ agent's sensory and interaction capabilities to wherever you are.
 
 **Proposed node capabilities:**
 
-| Capability | Platform | Description |
-|-----------|---------|-------------|
-| `node_camera` | iOS, Android | Take a photo or short video |
-| `node_location` | iOS, Android | Get current GPS coordinates |
-| `node_notify` | iOS, Android, macOS | Send a push notification |
-| `node_clipboard` | iOS, Android, macOS | Read/write system clipboard |
-| `node_screenshot` | macOS | Capture screen content |
-| `node_haptic` | iOS, Android | Vibrate the device |
+| Capability        | Platform            | Description                 |
+| ----------------- | ------------------- | --------------------------- |
+| `node_camera`     | iOS, Android        | Take a photo or short video |
+| `node_location`   | iOS, Android        | Get current GPS coordinates |
+| `node_notify`     | iOS, Android, macOS | Send a push notification    |
+| `node_clipboard`  | iOS, Android, macOS | Read/write system clipboard |
+| `node_screenshot` | macOS               | Capture screen content      |
+| `node_haptic`     | iOS, Android        | Vibrate the device          |
 
 **Security considerations:**
 
@@ -720,11 +720,11 @@ A visual workspace provides a richer output modality.
 
 **Proposed tools:**
 
-| Tool | Risk Level | Description |
-|------|-----------|-------------|
-| `canvas_push` | low | Push HTML/Markdown content to the workspace |
-| `canvas_clear` | low | Clear the workspace |
-| `canvas_snapshot` | low | Capture workspace as image |
+| Tool              | Risk Level | Description                                 |
+| ----------------- | ---------- | ------------------------------------------- |
+| `canvas_push`     | low        | Push HTML/Markdown content to the workspace |
+| `canvas_clear`    | low        | Clear the workspace                         |
+| `canvas_snapshot` | low        | Capture workspace as image                  |
 
 **Source:**
 OpenClaw's Canvas / A2UI provides an agent-driven visual workspace with
