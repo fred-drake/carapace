@@ -44,6 +44,8 @@ export class MockContainerRuntime implements ContainerRuntime {
 
   // -- Failure simulation flags --
 
+  private available = true;
+  private availableError: Error | null = null;
   private nextRunFailure: string | null = null;
   private nextStopTimeout = false;
 
@@ -56,7 +58,10 @@ export class MockContainerRuntime implements ContainerRuntime {
   // -----------------------------------------------------------------------
 
   async isAvailable(): Promise<boolean> {
-    return true;
+    if (this.availableError) {
+      throw this.availableError;
+    }
+    return this.available;
   }
 
   async version(): Promise<string> {
@@ -164,6 +169,20 @@ export class MockContainerRuntime implements ContainerRuntime {
   }
 
   /**
+   * Control what `isAvailable()` returns.
+   */
+  setAvailable(value: boolean): void {
+    this.available = value;
+  }
+
+  /**
+   * Make `isAvailable()` throw an error instead of returning a boolean.
+   */
+  setAvailableError(error: Error): void {
+    this.availableError = error;
+  }
+
+  /**
    * Simulate an unexpected container crash. Marks the container as `'dead'`
    * with exit code 137 (SIGKILL).
    */
@@ -192,6 +211,8 @@ export class MockContainerRuntime implements ContainerRuntime {
     this.containers.clear();
     this.images.clear();
     this.idCounter = 0;
+    this.available = true;
+    this.availableError = null;
     this.nextRunFailure = null;
     this.nextStopTimeout = false;
   }
