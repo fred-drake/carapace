@@ -31,6 +31,7 @@ export default defineConfig({
             'src/**/*.integration.{test,spec}.ts',
             'src/**/*.e2e.{test,spec}.ts',
             'src/**/*.security.{test,spec}.ts',
+            'src/testing/conformance.test.ts',
           ],
         },
       },
@@ -50,6 +51,12 @@ export default defineConfig({
         test: {
           name: 'e2e',
           include: ['src/**/*.e2e.{test,spec}.ts'],
+        },
+      },
+      {
+        test: {
+          name: 'conformance',
+          include: ['src/testing/conformance.test.ts'],
         },
       },
     ],
