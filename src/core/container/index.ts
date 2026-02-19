@@ -10,4 +10,6 @@ export type {
 
 export { detect } from './detect.js';
 
+export { DockerRuntime, type ExecFn, type DockerRuntimeOptions } from './docker-runtime.js';
+
 export { MockContainerRuntime } from './mock-runtime.js';
