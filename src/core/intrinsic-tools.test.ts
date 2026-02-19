@@ -231,6 +231,7 @@ describe('intrinsic tools', () => {
         {
           ok: true,
           pluginName: 'telegram',
+          source: 'user',
           manifest: {
             description: 'Telegram',
             version: '1.0.0',
@@ -248,6 +249,7 @@ describe('intrinsic tools', () => {
         {
           ok: true,
           pluginName: 'email',
+          source: 'built-in',
           manifest: {
             description: 'Email',
             version: '1.0.0',

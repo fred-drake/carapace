@@ -69,6 +69,9 @@ vi.mock('/plugins/collision/handler.js', () => importMocks.get('/plugins/collisi
 vi.mock('/plugins/shutdown-hang/handler.js', () =>
   importMocks.get('/plugins/shutdown-hang/handler.js')!(),
 );
+// Built-in plugin handler mocks
+vi.mock('/builtin/alpha/handler.js', () => importMocks.get('/builtin/alpha/handler.js')!());
+vi.mock('/builtin/beta/handler.js', () => importMocks.get('/builtin/beta/handler.js')!());
 
 // ---------------------------------------------------------------------------
 // Setup / Teardown
@@ -100,10 +103,16 @@ describe('PluginLoader', () => {
       >);
       allowAccess(['/plugins/alpha/manifest.json', '/plugins/beta/manifest.json']);
 
-      const loader = new PluginLoader({ toolCatalog: new ToolCatalog(), pluginsDir: '/plugins' });
-      const dirs = await loader.discoverPlugins();
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      const discovered = await loader.discoverPlugins();
 
-      expect(dirs).toEqual(['/plugins/alpha', '/plugins/beta']);
+      expect(discovered).toEqual([
+        { name: 'alpha', dir: '/plugins/alpha', source: 'user' },
+        { name: 'beta', dir: '/plugins/beta', source: 'user' },
+      ]);
     });
 
     it('ignores directories without manifest.json', async () => {
@@ -112,28 +121,37 @@ describe('PluginLoader', () => {
       >);
       allowAccess(['/plugins/alpha/manifest.json']);
 
-      const loader = new PluginLoader({ toolCatalog: new ToolCatalog(), pluginsDir: '/plugins' });
-      const dirs = await loader.discoverPlugins();
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      const discovered = await loader.discoverPlugins();
 
-      expect(dirs).toEqual(['/plugins/alpha']);
+      expect(discovered).toEqual([{ name: 'alpha', dir: '/plugins/alpha', source: 'user' }]);
     });
 
     it('handles empty plugins directory', async () => {
       mockReaddir.mockResolvedValue([] as unknown as Awaited<ReturnType<typeof readdir>>);
 
-      const loader = new PluginLoader({ toolCatalog: new ToolCatalog(), pluginsDir: '/plugins' });
-      const dirs = await loader.discoverPlugins();
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      const discovered = await loader.discoverPlugins();
 
-      expect(dirs).toEqual([]);
+      expect(discovered).toEqual([]);
     });
 
     it('returns empty array when plugins directory does not exist', async () => {
       mockReaddir.mockRejectedValue(new Error('ENOENT'));
 
-      const loader = new PluginLoader({ toolCatalog: new ToolCatalog(), pluginsDir: '/missing' });
-      const dirs = await loader.discoverPlugins();
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/missing',
+      });
+      const discovered = await loader.discoverPlugins();
 
-      expect(dirs).toEqual([]);
+      expect(discovered).toEqual([]);
     });
   });
 
@@ -156,7 +174,7 @@ describe('PluginLoader', () => {
       importMocks.set('/plugins/alpha/handler.js', () => Promise.resolve({ default: handler }));
 
       const catalog = new ToolCatalog();
-      const loader = new PluginLoader({ toolCatalog: catalog, pluginsDir: '/plugins' });
+      const loader = new PluginLoader({ toolCatalog: catalog, userPluginsDir: '/plugins' });
 
       const result = await loader.loadPlugin('/plugins/alpha');
 
@@ -165,8 +183,37 @@ describe('PluginLoader', () => {
         expect(result.pluginName).toBe('alpha');
         expect(result.manifest).toEqual(manifest);
         expect(result.handler).toBe(handler);
+        expect(result.source).toBe('user');
       }
       expect(catalog.has('alpha_tool')).toBe(true);
+    });
+
+    it('tags plugin with specified source', async () => {
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'alpha_builtin_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      allowAccess(['/builtin/alpha/manifest.json', '/builtin/alpha/handler.js']);
+      importMocks.set('/builtin/alpha/handler.js', () => Promise.resolve({ default: handler }));
+
+      const catalog = new ToolCatalog();
+      const loader = new PluginLoader({
+        toolCatalog: catalog,
+        userPluginsDir: '/plugins',
+        builtinPluginsDir: '/builtin',
+      });
+
+      const result = await loader.loadPlugin('/builtin/alpha', 'built-in');
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.source).toBe('built-in');
+      }
     });
 
     it('calls handler.initialize() with CoreServices', async () => {
@@ -182,7 +229,10 @@ describe('PluginLoader', () => {
       allowAccess(['/plugins/beta/manifest.json', '/plugins/beta/handler.js']);
       importMocks.set('/plugins/beta/handler.js', () => Promise.resolve({ default: handler }));
 
-      const loader = new PluginLoader({ toolCatalog: new ToolCatalog(), pluginsDir: '/plugins' });
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
       await loader.loadPlugin('/plugins/beta');
 
       expect(handler.initialize).toHaveBeenCalledTimes(1);
@@ -204,7 +254,10 @@ describe('PluginLoader', () => {
     it('rejects with category invalid_manifest for malformed JSON', async () => {
       mockReadFile.mockResolvedValue('{ not valid json }}}');
 
-      const loader = new PluginLoader({ toolCatalog: new ToolCatalog(), pluginsDir: '/plugins' });
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
       const result = await loader.loadPlugin('/plugins/alpha');
 
       expect(result.ok).toBe(false);
@@ -219,7 +272,10 @@ describe('PluginLoader', () => {
       // Missing required fields
       mockReadFile.mockResolvedValue(JSON.stringify({ description: 'incomplete' }));
 
-      const loader = new PluginLoader({ toolCatalog: new ToolCatalog(), pluginsDir: '/plugins' });
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
       const result = await loader.loadPlugin('/plugins/alpha');
 
       expect(result.ok).toBe(false);
@@ -232,7 +288,10 @@ describe('PluginLoader', () => {
     it('rejects when manifest.json cannot be read', async () => {
       mockReadFile.mockRejectedValue(new Error('ENOENT'));
 
-      const loader = new PluginLoader({ toolCatalog: new ToolCatalog(), pluginsDir: '/plugins' });
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
       const result = await loader.loadPlugin('/plugins/alpha');
 
       expect(result.ok).toBe(false);
@@ -261,7 +320,7 @@ describe('PluginLoader', () => {
       });
       mockReadFile.mockResolvedValue(JSON.stringify(manifest));
 
-      const loader = new PluginLoader({ toolCatalog: catalog, pluginsDir: '/plugins' });
+      const loader = new PluginLoader({ toolCatalog: catalog, userPluginsDir: '/plugins' });
       const result = await loader.loadPlugin('/plugins/collision');
 
       expect(result.ok).toBe(false);
@@ -291,7 +350,7 @@ describe('PluginLoader', () => {
 
         const loader = new PluginLoader({
           toolCatalog: new ToolCatalog(),
-          pluginsDir: '/plugins',
+          userPluginsDir: '/plugins',
         });
         const result = await loader.loadPlugin('/plugins/reserved');
 
@@ -321,7 +380,10 @@ describe('PluginLoader', () => {
       // access rejects for both handler.js and handler.ts
       allowAccess([]);
 
-      const loader = new PluginLoader({ toolCatalog: new ToolCatalog(), pluginsDir: '/plugins' });
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
       const result = await loader.loadPlugin('/plugins/alpha');
 
       expect(result.ok).toBe(false);
@@ -355,7 +417,7 @@ describe('PluginLoader', () => {
       importMocks.set('/plugins/init-fail/handler.js', () => Promise.resolve({ default: handler }));
 
       const catalog = new ToolCatalog();
-      const loader = new PluginLoader({ toolCatalog: catalog, pluginsDir: '/plugins' });
+      const loader = new PluginLoader({ toolCatalog: catalog, userPluginsDir: '/plugins' });
       const result = await loader.loadPlugin('/plugins/init-fail');
 
       expect(result.ok).toBe(false);
@@ -399,7 +461,7 @@ describe('PluginLoader', () => {
       const catalog = new ToolCatalog();
       const loader = new PluginLoader({
         toolCatalog: catalog,
-        pluginsDir: '/plugins',
+        userPluginsDir: '/plugins',
         initTimeoutMs: 50, // very short timeout with real timers
       });
 
@@ -435,7 +497,10 @@ describe('PluginLoader', () => {
       allowAccess(['/plugins/gamma/handler.js']);
       importMocks.set('/plugins/gamma/handler.js', () => Promise.resolve({ default: handler }));
 
-      const loader = new PluginLoader({ toolCatalog: new ToolCatalog(), pluginsDir: '/plugins' });
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
       await loader.loadPlugin('/plugins/gamma');
 
       await loader.shutdownAll();
@@ -460,7 +525,10 @@ describe('PluginLoader', () => {
         Promise.resolve({ default: handler }),
       );
 
-      const loader = new PluginLoader({ toolCatalog: new ToolCatalog(), pluginsDir: '/plugins' });
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
       await loader.loadPlugin('/plugins/shutdown-hang');
 
       // shutdownAll with short timeout — should not hang forever
@@ -520,7 +588,7 @@ describe('PluginLoader', () => {
       });
 
       const catalog = new ToolCatalog();
-      const loader = new PluginLoader({ toolCatalog: catalog, pluginsDir: '/plugins' });
+      const loader = new PluginLoader({ toolCatalog: catalog, userPluginsDir: '/plugins' });
       const results = await loader.loadAll();
 
       expect(results).toHaveLength(2);
@@ -532,6 +600,9 @@ describe('PluginLoader', () => {
       expect(failures).toHaveLength(1);
 
       expect(successes[0]!.pluginName).toBe('alpha');
+      if (successes[0]!.ok) {
+        expect(successes[0]!.source).toBe('user');
+      }
       expect(failures[0]!.pluginName).toBe('bad-handler');
 
       // Only the successful plugin's tool should be in the catalog
@@ -542,10 +613,219 @@ describe('PluginLoader', () => {
     it('returns empty array when no plugins are found', async () => {
       mockReaddir.mockResolvedValue([] as unknown as Awaited<ReturnType<typeof readdir>>);
 
-      const loader = new PluginLoader({ toolCatalog: new ToolCatalog(), pluginsDir: '/plugins' });
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
       const results = await loader.loadAll();
 
       expect(results).toEqual([]);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Dual-directory scanning
+  // -----------------------------------------------------------------------
+
+  describe('dual-directory scanning', () => {
+    it('discovers plugins from both built-in and user directories', async () => {
+      mockReaddir.mockImplementation(async (dir) => {
+        const dirStr = String(dir);
+        if (dirStr === '/builtin')
+          return ['alpha'] as unknown as Awaited<ReturnType<typeof readdir>>;
+        if (dirStr === '/plugins')
+          return ['beta'] as unknown as Awaited<ReturnType<typeof readdir>>;
+        throw new Error('ENOENT');
+      });
+      allowAccess(['/builtin/alpha/manifest.json', '/plugins/beta/manifest.json']);
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+        builtinPluginsDir: '/builtin',
+      });
+      const discovered = await loader.discoverPlugins();
+
+      expect(discovered).toEqual([
+        { name: 'alpha', dir: '/builtin/alpha', source: 'built-in' },
+        { name: 'beta', dir: '/plugins/beta', source: 'user' },
+      ]);
+    });
+
+    it('user plugin overrides built-in plugin of same name', async () => {
+      mockReaddir.mockImplementation(async (dir) => {
+        const dirStr = String(dir);
+        if (dirStr === '/builtin')
+          return ['alpha'] as unknown as Awaited<ReturnType<typeof readdir>>;
+        if (dirStr === '/plugins')
+          return ['alpha'] as unknown as Awaited<ReturnType<typeof readdir>>;
+        throw new Error('ENOENT');
+      });
+      allowAccess(['/builtin/alpha/manifest.json', '/plugins/alpha/manifest.json']);
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+        builtinPluginsDir: '/builtin',
+      });
+      const discovered = await loader.discoverPlugins();
+
+      // Only user version should remain
+      expect(discovered).toHaveLength(1);
+      expect(discovered[0]).toEqual({
+        name: 'alpha',
+        dir: '/plugins/alpha',
+        source: 'user',
+      });
+    });
+
+    it('works when built-in directory does not exist', async () => {
+      mockReaddir.mockImplementation(async (dir) => {
+        const dirStr = String(dir);
+        if (dirStr === '/builtin') throw new Error('ENOENT');
+        if (dirStr === '/plugins')
+          return ['alpha'] as unknown as Awaited<ReturnType<typeof readdir>>;
+        throw new Error('ENOENT');
+      });
+      allowAccess(['/plugins/alpha/manifest.json']);
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+        builtinPluginsDir: '/builtin',
+      });
+      const discovered = await loader.discoverPlugins();
+
+      expect(discovered).toEqual([{ name: 'alpha', dir: '/plugins/alpha', source: 'user' }]);
+    });
+
+    it('works when no builtinPluginsDir is provided', async () => {
+      mockReaddir.mockResolvedValue(['alpha'] as unknown as Awaited<ReturnType<typeof readdir>>);
+      allowAccess(['/plugins/alpha/manifest.json']);
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      const discovered = await loader.discoverPlugins();
+
+      expect(discovered).toEqual([{ name: 'alpha', dir: '/plugins/alpha', source: 'user' }]);
+    });
+
+    it('loadAll loads from both directories with correct sources', async () => {
+      mockReaddir.mockImplementation(async (dir) => {
+        const dirStr = String(dir);
+        if (dirStr === '/builtin')
+          return ['beta'] as unknown as Awaited<ReturnType<typeof readdir>>;
+        if (dirStr === '/plugins')
+          return ['alpha'] as unknown as Awaited<ReturnType<typeof readdir>>;
+        throw new Error('ENOENT');
+      });
+
+      const alphaManifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'alpha_tool' })],
+        },
+      });
+      const betaManifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'beta_builtin_tool' })],
+        },
+      });
+      const alphaHandler = createMockHandler();
+      const betaHandler = createMockHandler();
+
+      allowAccess([
+        '/plugins/alpha/manifest.json',
+        '/plugins/alpha/handler.js',
+        '/builtin/beta/manifest.json',
+        '/builtin/beta/handler.js',
+      ]);
+
+      mockReadFile.mockImplementation(async (path) => {
+        const pathStr = String(path);
+        if (pathStr.includes('/plugins/alpha')) return JSON.stringify(alphaManifest);
+        if (pathStr.includes('/builtin/beta')) return JSON.stringify(betaManifest);
+        throw new Error('ENOENT');
+      });
+
+      importMocks.set('/plugins/alpha/handler.js', () =>
+        Promise.resolve({ default: alphaHandler }),
+      );
+      importMocks.set('/builtin/beta/handler.js', () => Promise.resolve({ default: betaHandler }));
+
+      const catalog = new ToolCatalog();
+      const loader = new PluginLoader({
+        toolCatalog: catalog,
+        userPluginsDir: '/plugins',
+        builtinPluginsDir: '/builtin',
+      });
+      const results = await loader.loadAll();
+
+      expect(results).toHaveLength(2);
+      const successes = results.filter((r) => r.ok);
+      expect(successes).toHaveLength(2);
+
+      // Sorted by name: alpha (user) then beta (built-in)
+      expect(successes[0]!.pluginName).toBe('alpha');
+      if (successes[0]!.ok) expect(successes[0]!.source).toBe('user');
+      expect(successes[1]!.pluginName).toBe('beta');
+      if (successes[1]!.ok) expect(successes[1]!.source).toBe('built-in');
+
+      expect(catalog.has('alpha_tool')).toBe(true);
+      expect(catalog.has('beta_builtin_tool')).toBe(true);
+    });
+
+    it('loadAll with user override only loads user version', async () => {
+      mockReaddir.mockImplementation(async (dir) => {
+        const dirStr = String(dir);
+        if (dirStr === '/builtin')
+          return ['alpha'] as unknown as Awaited<ReturnType<typeof readdir>>;
+        if (dirStr === '/plugins')
+          return ['alpha'] as unknown as Awaited<ReturnType<typeof readdir>>;
+        throw new Error('ENOENT');
+      });
+
+      const userManifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'alpha_user_tool' })],
+        },
+      });
+      const userHandler = createMockHandler();
+
+      allowAccess([
+        '/builtin/alpha/manifest.json',
+        '/plugins/alpha/manifest.json',
+        '/plugins/alpha/handler.js',
+      ]);
+
+      mockReadFile.mockImplementation(async (path) => {
+        const pathStr = String(path);
+        if (pathStr.includes('/plugins/alpha')) return JSON.stringify(userManifest);
+        throw new Error('ENOENT');
+      });
+
+      importMocks.set('/plugins/alpha/handler.js', () => Promise.resolve({ default: userHandler }));
+
+      const catalog = new ToolCatalog();
+      const loader = new PluginLoader({
+        toolCatalog: catalog,
+        userPluginsDir: '/plugins',
+        builtinPluginsDir: '/builtin',
+      });
+      const results = await loader.loadAll();
+
+      // Only user version loaded
+      expect(results).toHaveLength(1);
+      expect(results[0]!.ok).toBe(true);
+      if (results[0]!.ok) {
+        expect(results[0]!.pluginName).toBe('alpha');
+        expect(results[0]!.source).toBe('user');
+      }
+      expect(catalog.has('alpha_user_tool')).toBe(true);
     });
   });
 });
