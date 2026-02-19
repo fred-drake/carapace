@@ -1,0 +1,41 @@
+{
+  "name": "@carapace/core",
+  "version": "0.0.1",
+  "description": "Security-first, plugin-driven personal AI agent framework",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "lint": "oxlint",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run --passWithNoTests",
+    "test:coverage": "vitest run --coverage",
+    "test:integration": "vitest run --project integration",
+    "test:security": "vitest run --project security",
+    "test:e2e": "vitest run --project e2e"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@vitest/coverage-v8": "^3.0.0",
+    "oxlint": "^0.16.0",
+    "prettier": "^3.4.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "zeromq": "^6.4.0"
+  },
+  "packageManager": "pnpm@9.15.4"
+}

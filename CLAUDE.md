@@ -47,10 +47,10 @@ Two domains separated by a hard trust boundary:
 
 Two channels over Unix sockets:
 
-| Channel | Pattern | Purpose |
-|---------|---------|---------|
-| Event Bus | PUB/SUB | External triggers that **start** sessions (email arrives, cron fires) |
-| Request Channel | ROUTER/DEALER | Tool invocations **during** sessions (agent needs a result) |
+| Channel         | Pattern       | Purpose                                                               |
+| --------------- | ------------- | --------------------------------------------------------------------- |
+| Event Bus       | PUB/SUB       | External triggers that **start** sessions (email arrives, cron fires) |
+| Request Channel | ROUTER/DEALER | Tool invocations **during** sessions (agent needs a result)           |
 
 ### Wire Format (Container → Host)
 
@@ -92,14 +92,16 @@ Incremental stubs: "not defined" → create stub, "not a function" → add metho
 
 Six specialized roles for task generation and architectural review. Re-create with: `TeamCreate` named `carapace-planning`, then spawn each role as a teammate with `team_name: "carapace-planning"`. Each role has a persistent instruction file in `docs/team-roles/`.
 
-| Role | Name | Focus |
-|------|------|-------|
-| Architect | `architect` | System decomposition, module boundaries, dependency ordering, interface contracts, critical path |
-| DevOps | `devops` | Container runtime, CI/CD, Nix packaging, ZeroMQ socket lifecycle, health checks, deployment |
-| Security | `security` | Trust boundaries, schema validation, credential isolation, rate limiting, prompt injection defense |
-| DX Advocate | `dx-advocate` | Plugin authoring experience, CLI ergonomics, scaffolding, error messages, debugging tools |
-| Software Engineer | `engineer` | Core implementation: router, IPC binary, plugin loader, messaging, SQLite, memory plugin |
-| QA | `qa` | Test framework, TDD enforcement, integration harness, security testing, plugin conformance |
+**Nix environment caveat**: If `flake.nix` is modified during a session, any running AI team agents must be shut down and re-spawned so they pick up the new dev shell environment. The Nix flake is evaluated when an agent starts; changes are not reflected in already-running agents.
+
+| Role              | Name          | Focus                                                                                              |
+| ----------------- | ------------- | -------------------------------------------------------------------------------------------------- |
+| Architect         | `architect`   | System decomposition, module boundaries, dependency ordering, interface contracts, critical path   |
+| DevOps            | `devops`      | Container runtime, CI/CD, Nix packaging, ZeroMQ socket lifecycle, health checks, deployment        |
+| Security          | `security`    | Trust boundaries, schema validation, credential isolation, rate limiting, prompt injection defense |
+| DX Advocate       | `dx-advocate` | Plugin authoring experience, CLI ergonomics, scaffolding, error messages, debugging tools          |
+| Software Engineer | `engineer`    | Core implementation: router, IPC binary, plugin loader, messaging, SQLite, memory plugin           |
+| QA                | `qa`          | Test framework, TDD enforcement, integration harness, security testing, plugin conformance         |
 
 ### Spawning a Teammate
 
