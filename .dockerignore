@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+.direnv
+.git
+.github
+docs
+*.md
+!package.json
+.env*
+.DS_Store
+.claude
