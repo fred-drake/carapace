@@ -17,3 +17,10 @@ export type { ExecFn } from './docker-runtime.js';
 export { PodmanRuntime, type PodmanRuntimeOptions } from './podman-runtime.js';
 
 export { MockContainerRuntime } from './mock-runtime.js';
+
+export {
+  ContainerLifecycleManager,
+  type LifecycleManagerOptions,
+  type SpawnRequest,
+  type ManagedContainer,
+} from './lifecycle-manager.js';
