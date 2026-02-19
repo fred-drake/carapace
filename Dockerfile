@@ -1,6 +1,6 @@
 # Carapace container image — multi-stage build
 # Runtime is read-only (enforce with `docker run --read-only`).
-# Writable paths at runtime: /workspace, /run/zmq
+# Writable paths at runtime: /workspace, /home/node/.claude/, /tmp
 
 # ---------------------------------------------------------------------------
 # Stage 1: builder — install deps and compile TypeScript
@@ -31,22 +31,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libzmq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Non-root user for security
-RUN groupadd --gid 1001 carapace && \
-    useradd --uid 1001 --gid carapace --shell /bin/false --create-home carapace
+# Install Claude Code CLI globally
+RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
 
 WORKDIR /app
 
-# Copy production artifacts from builder
-COPY --from=builder --chown=carapace:carapace /build/dist/ dist/
-COPY --from=builder --chown=carapace:carapace /build/node_modules/ node_modules/
-COPY --from=builder --chown=carapace:carapace /build/package.json package.json
+# Copy production artifacts from builder (uses node user, UID 1000)
+COPY --from=builder --chown=node:node /build/dist/ dist/
+COPY --from=builder --chown=node:node /build/node_modules/ node_modules/
+COPY --from=builder --chown=node:node /build/package.json package.json
+
+# Create ipc wrapper script in PATH so Claude Code can invoke `ipc <topic> <args>`
+RUN printf '#!/bin/sh\nexec node /app/dist/ipc/main.js "$@"\n' > /usr/local/bin/ipc && \
+    chmod +x /usr/local/bin/ipc
+
+# Copy entrypoint wrapper for credential injection
+COPY --chown=node:node src/container/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Create writable directories (for --read-only runtime)
-RUN mkdir -p /workspace /run/zmq && \
-    chown carapace:carapace /workspace /run/zmq
+RUN mkdir -p /workspace /run/zmq /home/node/.claude /tmp && \
+    chown node:node /workspace /run/zmq /home/node/.claude
 
-USER carapace
+USER node
 
-# Default entrypoint — can be overridden by orchestrator
-ENTRYPOINT ["node", "dist/index.js"]
+# Entrypoint reads credentials from stdin, then exec's into Claude Code
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
