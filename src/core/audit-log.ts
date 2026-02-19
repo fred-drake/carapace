@@ -130,6 +130,13 @@ export class AuditLog {
     return this.readGroup(group).filter((e) => e.outcome === outcome);
   }
 
+  /**
+   * Read all entries for a group. Returns an empty array if no entries exist.
+   */
+  getEntries(group: string): AuditEntry[] {
+    return this.readGroup(group);
+  }
+
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
