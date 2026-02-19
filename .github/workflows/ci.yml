@@ -85,12 +85,34 @@ jobs:
   #   runs-on: ubuntu-latest
 
   # ---------------------------------------------------------------------------
-  # Stage 5: Container build (future — DEVOPS-01 refinement)
+  # Stage 5: Container build + Trivy scan + smoke test (DEVOPS-08)
   # ---------------------------------------------------------------------------
-  # container:
-  #   name: Container Build
-  #   needs: [test]
-  #   runs-on: ubuntu-latest
+  container:
+    name: Container Build & Scan
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build the container image
+      - name: Build container image
+        run: docker build -t carapace-agent:ci .
+
+      # Trivy vulnerability scan — block on HIGH and CRITICAL findings
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: carapace-agent:ci
+          format: table
+          exit-code: 1
+          severity: HIGH,CRITICAL
+          timeout: 5m
+
+      # Container smoke test — validates security constraints
+      - name: Container smoke test
+        run: |
+          chmod +x scripts/container-smoke-test.sh
+          ./scripts/container-smoke-test.sh carapace-agent:ci
 
   # ---------------------------------------------------------------------------
   # Stage 6: E2E tests (future — QA-10)
