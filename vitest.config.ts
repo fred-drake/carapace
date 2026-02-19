@@ -32,6 +32,7 @@ export default defineConfig({
             'src/**/*.e2e.{test,spec}.ts',
             'src/**/*.security.{test,spec}.ts',
             'src/testing/conformance.test.ts',
+            'src/benchmarks/**',
           ],
         },
       },
@@ -39,24 +40,28 @@ export default defineConfig({
         test: {
           name: 'integration',
           include: ['src/**/*.integration.{test,spec}.ts'],
+          exclude: ['src/benchmarks/**'],
         },
       },
       {
         test: {
           name: 'security',
           include: ['src/**/*.security.{test,spec}.ts'],
+          exclude: ['src/benchmarks/**'],
         },
       },
       {
         test: {
           name: 'e2e',
           include: ['src/**/*.e2e.{test,spec}.ts'],
+          exclude: ['src/benchmarks/**'],
         },
       },
       {
         test: {
           name: 'conformance',
           include: ['src/testing/conformance.test.ts'],
+          exclude: ['src/benchmarks/**'],
         },
       },
     ],
