@@ -1,0 +1,138 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: E2E Nightly Tests
+
+on:
+  schedule:
+    # Run at 03:00 UTC every day
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      budget_tokens:
+        description: 'Max total tokens for this run (default: 500000)'
+        required: false
+        default: '500000'
+
+# E2e tests NEVER gate merges — reporting only
+permissions:
+  contents: read
+  issues: write
+
+env:
+  MAX_TOKENS: ${{ github.event.inputs.budget_tokens || '500000' }}
+  MAX_COST_CENTS: '2000'
+  MAX_DURATION_SECONDS: '3600'
+  ALERT_PASS_RATE_THRESHOLD: '0.7'
+  ALERT_CONSECUTIVE_RUNS: '3'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Stage 1: Run e2e tests with budget enforcement
+  # ---------------------------------------------------------------------------
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Install pnpm
+        run: corepack enable && corepack prepare pnpm@10.28.0 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Run e2e tests with budget caps
+        id: e2e
+        run: |
+          node dist/devops/run-e2e.js \
+            --max-tokens "$MAX_TOKENS" \
+            --max-cost-cents "$MAX_COST_CENTS" \
+            --max-duration-seconds "$MAX_DURATION_SECONDS" \
+            --output results.json
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.E2E_ANTHROPIC_API_KEY }}
+        continue-on-error: true
+
+      - uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
+        with:
+          name: e2e-results-${{ github.run_id }}
+          path: results.json
+          retention-days: 90
+
+  # ---------------------------------------------------------------------------
+  # Stage 2: Analyze results and track trends
+  # ---------------------------------------------------------------------------
+  analyze:
+    name: Analyze & Report
+    runs-on: ubuntu-latest
+    needs: [e2e-tests]
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Install pnpm
+        run: corepack enable && corepack prepare pnpm@10.28.0 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+      - uses: actions/download-artifact@c850b930e6ba138125429b7e5c93fc707a7f8427 # v4.1.4
+        with:
+          name: e2e-results-${{ github.run_id }}
+
+      - name: Categorize results and compute trends
+        id: analyze
+        run: |
+          node dist/devops/analyze-e2e.js \
+            --results results.json \
+            --trend-file e2e-trend.json \
+            --alert-threshold "$ALERT_PASS_RATE_THRESHOLD" \
+            --alert-consecutive "$ALERT_CONSECUTIVE_RUNS" \
+            --output report.json
+
+      - uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
+        with:
+          name: e2e-report-${{ github.run_id }}
+          path: |
+            report.json
+            e2e-trend.json
+          retention-days: 90
+
+  # ---------------------------------------------------------------------------
+  # Stage 3: Alert on sustained pass-rate drops
+  # ---------------------------------------------------------------------------
+  alert:
+    name: Alert Check
+    runs-on: ubuntu-latest
+    needs: [analyze]
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - uses: actions/download-artifact@c850b930e6ba138125429b7e5c93fc707a7f8427 # v4.1.4
+        with:
+          name: e2e-report-${{ github.run_id }}
+
+      - name: Check alert conditions
+        id: alert-check
+        run: |
+          SHOULD_ALERT=$(jq -r '.alert.shouldAlert' report.json)
+          echo "should_alert=$SHOULD_ALERT" >> "$GITHUB_OUTPUT"
+          if [ "$SHOULD_ALERT" = "true" ]; then
+            MESSAGE=$(jq -r '.alert.message' report.json)
+            echo "alert_message=$MESSAGE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create alert issue
+        if: steps.alert-check.outputs.should_alert == 'true'
+        run: |
+          gh issue create \
+            --title "E2E Alert: Pass rate below threshold" \
+            --body "$(jq -r '.alert.message' report.json)" \
+            --label "e2e-alert,automated"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
