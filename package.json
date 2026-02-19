@@ -27,7 +27,9 @@
     "test:integration": "vitest run --project integration --passWithNoTests",
     "test:security": "vitest run --project security --passWithNoTests",
     "test:e2e": "vitest run --project e2e --passWithNoTests",
-    "test:conformance": "vitest run --project conformance --passWithNoTests"
+    "test:conformance": "vitest run --project conformance --passWithNoTests",
+    "test:bench": "vitest bench --config vitest.bench.config.ts",
+    "test:bench:ci": "vitest bench --config vitest.bench.config.ts --outputJson bench-results.json"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
