@@ -62,8 +62,9 @@ and configuration schema. The manifest schema itself must enforce
 rejected with clear errors. TypeScript types match the JSON Schema.
 **Complexity**: M
 
-### ENG-01: Implement ZeroMQ PUB/SUB event bus
+### ~~ENG-01: Implement ZeroMQ PUB/SUB event bus~~ DONE
 
+**Status**: Completed (PR #13, merged 2026-02-18)
 **Role**: Engineer
 **Description**: Build the event bus using ZeroMQ PUB/SUB pattern over Unix domain
 sockets. Core runs a PUB socket; plugins and container subscribe by topic prefix.
@@ -77,8 +78,9 @@ to that topic. Unsubscribed topics are not received. Socket cleanup on shutdown 
 clean (no lingering files).
 **Complexity**: M
 
-### ENG-02: Implement ZeroMQ ROUTER/DEALER request channel
+### ~~ENG-02: Implement ZeroMQ ROUTER/DEALER request channel~~ DONE
 
+**Status**: Completed (PR #14, merged 2026-02-18)
 **Role**: Engineer
 **Description**: Build the request-response channel using ZeroMQ ROUTER/DEALER pattern.
 Core runs ROUTER; agent and plugins connect as DEALERs. Core routes requests by topic
@@ -143,8 +145,9 @@ single file. `pnpm test:coverage` generates reports. `pnpm test:integration` run
 integration-tagged tests only. Vitest config handles TypeScript and path aliases.
 **Complexity**: S
 
-### QA-02: Build test fixtures and factories
+### ~~QA-02: Build test fixtures and factories~~ DONE
 
+**Status**: Completed (PR #15, merged 2026-02-18)
 **Role**: QA
 **Description**: Create factory functions for common test objects: `createWireMessage()`,
 `createEnvelope()`, `createManifest()`, `createPluginConfig()`, `createTestDatabase()`
@@ -157,8 +160,9 @@ Any field can be overridden. Factories are typed — TypeScript catches invalid 
 at compile time. SQLite test helpers create in-memory DBs with migrations applied.
 **Complexity**: S
 
-### QA-03: Build ZeroMQ mock infrastructure
+### ~~QA-03: Build ZeroMQ mock infrastructure~~ DONE
 
+**Status**: Completed (PR #11, merged 2026-02-18)
 **Role**: QA
 **Description**: Create mock/fake ZeroMQ sockets for unit testing: `FakePubSocket`,
 `FakeSubSocket`, `FakeRouterSocket`, `FakeDealerSocket`. These capture sent messages
@@ -171,8 +175,9 @@ timeouts. Fakes simulate failure modes (refused, timeout, oversized). API mirror
 zeromq.js closely enough that tests are meaningful.
 **Complexity**: M
 
-### QA-09: Build mock container runtime
+### ~~QA-09: Build mock container runtime~~ DONE
 
+**Status**: Completed (PR #12, merged 2026-02-18)
 **Role**: QA
 **Description**: Create a mock container runtime for testing session manager (ENG-06),
 container lifecycle manager (DEVOPS-03), and container-related code without Docker.
