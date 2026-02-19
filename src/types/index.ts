@@ -33,3 +33,14 @@ export {
 } from './manifest.js';
 
 export { MANIFEST_JSON_SCHEMA } from './manifest-schema.js';
+
+export {
+  type SubMessageHandler,
+  type RouterMessageHandler,
+  type DealerMessageHandler,
+  type PublisherSocket,
+  type SubscriberSocket,
+  type RouterSocket,
+  type DealerSocket,
+  type SocketFactory,
+} from './socket.js';
