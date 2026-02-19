@@ -219,6 +219,59 @@ describe('release artifacts', () => {
 });
 
 // ---------------------------------------------------------------------------
+// GPG signing (SEC-20)
+// ---------------------------------------------------------------------------
+
+describe('GPG signing', () => {
+  it('has a gpg-sign job', () => {
+    const jobs = getJobs(loadWorkflow());
+    expect(jobs['gpg-sign']).toBeDefined();
+  });
+
+  it('imports GPG key from secrets', () => {
+    const content = getWorkflowContent();
+    expect(content).toMatch(/GPG_PRIVATE_KEY/);
+    expect(content).toMatch(/gpg.*--import/);
+  });
+
+  it('signs tarballs with --detach-sign --armor', () => {
+    const content = getWorkflowContent();
+    expect(content).toContain('--detach-sign');
+    expect(content).toContain('--armor');
+  });
+
+  it('uploads .asc signature files as artifacts', () => {
+    const content = getWorkflowContent();
+    expect(content).toMatch(/\.asc/);
+  });
+
+  it('uses --batch flag for non-interactive signing', () => {
+    const content = getWorkflowContent();
+    // gpg --batch appears in the signing step
+    expect(content).toMatch(/gpg\s+--batch/);
+  });
+
+  it('release job depends on gpg-sign', () => {
+    const jobs = getJobs(loadWorkflow());
+    const release = jobs.release as Record<string, unknown>;
+    const needs = release.needs as string[];
+    expect(needs).toContain('gpg-sign');
+  });
+
+  it('collects .asc files into release artifacts', () => {
+    const content = getWorkflowContent();
+    // The collect step should include .asc files
+    expect(content).toMatch(/-name '?\*\.asc'?/);
+  });
+
+  it('release notes include GPG verification instructions', () => {
+    const content = getWorkflowContent();
+    expect(content).toMatch(/gpg --verify/);
+    expect(content).toMatch(/release-key\.asc/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Permissions
 // ---------------------------------------------------------------------------
 
