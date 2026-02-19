@@ -14,3 +14,5 @@ export {
 } from './fake-sockets.js';
 
 export { FakeSocketFactory } from './fake-socket-factory.js';
+
+export { MockContainerRuntime, type StopCallRecord } from './mock-container-runtime.js';
