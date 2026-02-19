@@ -17,7 +17,8 @@
       "@carapace/ipc/*": ["./src/ipc/*"],
       "@carapace/plugins/*": ["./src/plugins/*"],
       "@carapace/types/*": ["./src/types/*"],
-      "@carapace/container/*": ["./src/container/*"]
+      "@carapace/container/*": ["./src/container/*"],
+      "@carapace/testing/*": ["./src/testing/*"]
     }
   },
   "include": ["src/**/*"],
