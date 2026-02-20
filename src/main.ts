@@ -25,7 +25,8 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { createInterface } from 'node:readline';
 
 import { parseArgs, runCommand } from './cli.js';
@@ -112,17 +113,19 @@ function dirSize(path: string): number {
   }
 }
 
-function exec(cmd: string): Promise<{ stdout: string; stderr: string }> {
+function exec(file: string, args: readonly string[]): Promise<{ stdout: string; stderr: string }> {
   try {
-    const stdout = execSync(cmd, { encoding: 'utf-8', timeout: 10_000 });
+    const stdout = execFileSync(file, [...args], { encoding: 'utf-8', timeout: 10_000 });
     return Promise.resolve({ stdout, stderr: '' });
   } catch (err: unknown) {
     return Promise.reject(err);
   }
 }
 
+const esmRequire = createRequire(import.meta.url);
+
 function resolveModule(name: string): string {
-  return require.resolve(name);
+  return esmRequire.resolve(name);
 }
 
 // ---------------------------------------------------------------------------
