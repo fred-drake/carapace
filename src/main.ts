@@ -215,7 +215,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
     home,
     nodeVersion: process.version,
     platform: process.platform,
-    runtimes: [new DockerRuntime(), new PodmanRuntime(), new AppleContainerRuntime()],
+    runtimes: [new AppleContainerRuntime(), new PodmanRuntime(), new DockerRuntime()],
     readPidFile: () => readPidFile(home),
     writePidFile: (pid: number) => writePidFile(home, pid),
     removePidFile: () => removePidFile(home),
