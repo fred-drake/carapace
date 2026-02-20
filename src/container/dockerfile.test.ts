@@ -53,8 +53,20 @@ describe('Dockerfile', () => {
   // -----------------------------------------------------------------------
 
   describe('Claude Code CLI', () => {
-    it('installs the @anthropic-ai/claude-code package', () => {
-      expect(hasLine(/npm install.*@anthropic-ai\/claude-code/)).toBe(true);
+    it('installs via native installer', () => {
+      expect(hasLine(/claude\.ai\/install\.sh/)).toBe(true);
+    });
+
+    it('accepts a version build arg', () => {
+      expect(hasLine(/ARG\s+CLAUDE_CODE_VERSION/)).toBe(true);
+    });
+
+    it('passes version to installer', () => {
+      expect(hasLine(/install\.sh.*CLAUDE_CODE_VERSION/)).toBe(true);
+    });
+
+    it('disables auto-updater', () => {
+      expect(hasLine(/DISABLE_AUTOUPDATER.*1/)).toBe(true);
     });
   });
 
