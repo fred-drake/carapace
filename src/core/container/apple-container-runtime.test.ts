@@ -85,9 +85,9 @@ describe('AppleContainerRuntime', () => {
 
   describe('isAvailable', () => {
     it('returns true when container CLI responds', async () => {
-      mock.handler.mockResolvedValueOnce({ stdout: 'container info', stderr: '' });
+      mock.handler.mockResolvedValueOnce({ stdout: '', stderr: '' });
       expect(await runtime.isAvailable()).toBe(true);
-      expect(mock.calls[0].args).toEqual(['info']);
+      expect(mock.calls[0].args).toEqual(['list']);
     });
 
     it('returns false when container CLI is not found', async () => {
