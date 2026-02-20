@@ -78,29 +78,47 @@ unexpected fields.
 
 ## Installation
 
-### Install script (recommended)
+### From source (current)
 
-The install script downloads a release tarball, verifies the SHA-256 checksum,
-pulls the container image, and verifies its cosign signature.
+No releases are published yet. Clone the repo, build, and run directly:
+
+```bash
+git clone https://github.com/fred-drake/carapace.git
+cd carapace
+direnv allow          # or: nix develop
+pnpm install
+pnpm run build
+node dist/main.js doctor
+```
+
+This gives you the `main.js` entry point at `dist/main.js`. Run any
+subcommand with `node dist/main.js <command>`.
+
+### Nix build
+
+If you use [Nix](https://nixos.org/) with flakes enabled, you can build a
+self-contained package with a `carapace` wrapper script:
+
+```bash
+nix build            # from a local checkout
+./result/bin/carapace doctor
+```
+
+Or build and install directly from GitHub:
+
+```bash
+nix profile install github:fred-drake/carapace
+carapace doctor
+```
+
+### Install script (not yet available)
+
+Once releases are published, the install script will download a release
+tarball, verify the SHA-256 checksum, pull the container image, and verify
+its cosign signature:
 
 ```bash
 curl -fsSL https://get.carapace.dev | sh
-```
-
-Options:
-
-```bash
-# Preview what would happen without making changes
-sh install.sh --dry-run
-
-# Install a specific version with a specific container runtime
-sh install.sh --version v1.0.0 --runtime docker
-
-# Non-interactive (skip all prompts)
-sh install.sh --yes
-
-# Don't modify shell profile for PATH
-sh install.sh --no-modify-path
 ```
 
 The install script detects your platform (`darwin`/`linux`) and architecture
@@ -110,18 +128,11 @@ The install script detects your platform (`darwin`/`linux`) and architecture
 **Requirements**: `curl` or `wget`, `tar`, `sha256sum` or `shasum`, and a
 container runtime (`docker`, `podman`, or Apple Containers on macOS 26+).
 
-### Nix
-
-If you use [Nix](https://nixos.org/) with flakes enabled:
-
-```bash
-nix profile install github:fred-drake/carapace
-```
-
-This installs the host binary and pins all runtime dependencies. The exact
-flake outputs are being finalized in DEVOPS-18.
-
 ## Quick start
+
+The examples below use `carapace` as the command. If you installed from
+source, substitute `node dist/main.js`; if you used `nix build`, use
+`./result/bin/carapace`.
 
 ```bash
 # Check that all dependencies are satisfied
@@ -219,9 +230,11 @@ Carapace's security is architectural, not application-level:
 
 ## Project status
 
-Early stage, active development. The foundation (P0 tasks) and core
-functionality (P1) are complete. Features and polish (P2) are in progress.
-See [docs/TASKS.md](docs/TASKS.md) for the full breakdown.
+Active development. Foundation (P0), core functionality (P1), and most
+feature/hardening tasks (P2) are complete. End-to-end plumbing (Phase E2E)
+is validated — the full pipeline from host server through container to echo
+plugin round-trip works. See [docs/TASKS.md](docs/TASKS.md) for the full
+breakdown.
 
 ## Documentation
 

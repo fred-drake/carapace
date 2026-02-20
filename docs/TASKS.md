@@ -8,6 +8,8 @@
 > Updated (2026-02-19) — Waves 2-5 P1 tasks marked DONE (PRs #29-55).
 > Updated (2026-02-19) — Waves 6-9 P2 tasks marked DONE (PRs #56-67).
 > Updated (2026-02-19) — Waves 10-14 P2 tasks marked DONE (PRs #68-91).
+> Updated (2026-02-19) — Phase E2E tasks added and completed (ENG-24 through
+> ENG-28, QA-11, PRs #103-108). End-to-end plumbing validated.
 > Organized by priority tier, then by role. Tasks reference each other by ID.
 
 ## Legend
@@ -2083,14 +2085,105 @@ These can all start immediately after ARCH-01:
 
 ---
 
+## Phase E2E — End-to-End Plumbing
+
+> Goal: complete round-trip — `carapace start` → container with Claude Code →
+> echo plugin invocation via IPC → response returned. All tasks completed
+> 2026-02-19 (PRs #103-108), each code reviewed before merge.
+
+### ~~ENG-24: Implement ZmqSocketFactory (production SocketFactory)~~ DONE
+
+**Status**: Completed (PR #103, merged 2026-02-19)
+**Role**: Engineer
+**Priority**: P1
+**Description**: Real `SocketFactory` implementation using the `zeromq` npm
+package. Creates Router, Dealer, Publisher, and Subscriber sockets bound to
+Unix socket paths.
+**Dependencies**: None
+**Complexity**: M
+
+### ~~ENG-25: Implement server orchestrator (composition root)~~ DONE
+
+**Status**: Completed (PR #104, merged 2026-02-19)
+**Role**: Engineer / Architect
+**Priority**: P1
+**Description**: `src/server.ts` composition root wiring all subsystems:
+ZmqSocketFactory → SocketProvisioner → RequestChannel → EventBus →
+PluginLoader → ToolCatalog → SessionManager → MessageRouter. ResponseSanitizer
+wired into dispatch path. Blocking server loop with SIGINT/SIGTERM handling.
+**Dependencies**: ENG-24
+**Complexity**: L
+
+### ~~ENG-26: Wire main() entry point and update CLI start command~~ DONE
+
+**Status**: Completed (PR #105, merged 2026-02-19)
+**Role**: Engineer / DX
+**Priority**: P1
+**Description**: `src/main.ts` with `main()` function wiring real `CliDeps`
+to `runCommand()`. Updated `start()` to run the server (blocking) instead of
+just writing a PID. Updated `flake.nix` wrapper to `dist/main.js`.
+**Dependencies**: ENG-25
+**Complexity**: M
+
+### ~~ENG-27: Build Docker container with Claude Code + echo plugin~~ DONE
+
+**Status**: Completed (PR #106, merged 2026-02-19)
+**Role**: DevOps / Engineer
+**Priority**: P1
+**Description**: Added `stdinData` field to `ContainerRunOptions` for
+credential injection via stdin pipe (not env vars). Two-step `docker create -i`
+
+- `docker start -ai` flow in DockerRuntime. Echo plugin skill file added.
+  **Dependencies**: ENG-26
+  **Complexity**: L
+
+### ~~ENG-28: End-to-end echo plugin invocation~~ DONE
+
+**Status**: Completed (PR #107, merged 2026-02-19)
+**Role**: Engineer / QA
+**Priority**: P1
+**Description**: Intrinsic echo tool registered in server.ts during boot
+(always available, no filesystem discovery). Full round-trip tested: client
+DEALER → RequestChannel → Server.handleRequest → SessionManager →
+MessageRouter → echoToolHandler → ResponseSanitizer → response. 8 E2E tests
+including credential sanitization verification.
+**Dependencies**: ENG-27
+**Complexity**: M
+
+### ~~QA-11: E2E smoke test~~ DONE
+
+**Status**: Completed (PR #108, merged 2026-02-19)
+**Role**: QA
+**Priority**: P1
+**Description**: Automated test suite validating the full Phase E2E pipeline.
+74 tests across 4 files, runs in ~530ms via `pnpm run test:e2e`. Covers:
+full round-trip with cleanup, credential sanitization, multi-container
+isolation, validation rejection, unknown tool error, server stop idempotency,
+container crash detection, sequential request integrity.
+**Dependencies**: ENG-28
+**Complexity**: M
+
+### Phase E2E dependency graph
+
+```
+ENG-24 (ZmqSocketFactory) ✓
+  └── ENG-25 (server orchestrator) ✓
+        └── ENG-26 (main() + CLI start) ✓
+              └── ENG-27 (Docker container image) ✓
+                    └── ENG-28 (echo round-trip) ✓
+                          └── QA-11 (E2E smoke test) ✓
+```
+
+---
+
 ## Task Summary
 
-| Category  |  Count |     P0 |     P1 |     P2 |
-| --------- | -----: | -----: | -----: | -----: |
-| ARCH      |      5 |      3 |      2 |      0 |
-| ENG       |     23 |      4 |     12 |      7 |
-| SEC       |     21 |      0 |      9 |     12 |
-| DEVOPS    |     20 |      2 |     12 |      6 |
-| DX        |     14 |      0 |      6 |      8 |
-| QA        |     11 |      5 |      2 |      4 |
-| **Total** | **94** | **14** | **43** | **37** |
+| Category  |   Count |     P0 |     P1 |     P2 |
+| --------- | ------: | -----: | -----: | -----: |
+| ARCH      |       5 |      3 |      2 |      0 |
+| ENG       |      28 |      4 |     17 |      7 |
+| SEC       |      21 |      0 |      9 |     12 |
+| DEVOPS    |      20 |      2 |     12 |      6 |
+| DX        |      14 |      0 |      6 |      8 |
+| QA        |      12 |      5 |      3 |      4 |
+| **Total** | **100** | **14** | **49** | **37** |
