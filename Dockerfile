@@ -26,13 +26,19 @@ RUN pnpm prune --prod
 # ---------------------------------------------------------------------------
 FROM node:22-slim AS runtime
 
-# Install libzmq for ZeroMQ native bindings
+# Install libzmq for ZeroMQ native bindings + curl for Claude Code installer
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libzmq5 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Claude Code CLI globally
-RUN npm install -g @anthropic-ai/claude-code && npm cache clean --force
+# Claude Code version — override at build time: --build-arg CLAUDE_CODE_VERSION=2.1.49
+# CI resolves latest automatically from the release channel URL:
+#   curl -fsSL https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/latest
+ARG CLAUDE_CODE_VERSION=latest
+ENV DISABLE_AUTOUPDATER=1
+RUN curl -fsSL https://claude.ai/install.sh | bash -s ${CLAUDE_CODE_VERSION} && \
+    ln -s /root/.local/bin/claude /usr/local/bin/claude
 
 WORKDIR /app
 
