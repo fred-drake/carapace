@@ -37,6 +37,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #   curl -fsSL https://storage.googleapis.com/claude-code-dist-86c565f3-f756-42ad-8dfa-d59b1c096819/claude-code-releases/latest
 ARG CLAUDE_CODE_VERSION=latest
 ENV DISABLE_AUTOUPDATER=1
+
+# Image identity labels — passed by image-builder at build time
+ARG CARAPACE_VERSION=dev
+ARG GIT_SHA=unknown
+ARG BUILD_DATE=unknown
+
 RUN curl -fsSL https://claude.ai/install.sh | bash -s ${CLAUDE_CODE_VERSION} && \
     ln -s /root/.local/bin/claude /usr/local/bin/claude
 
@@ -58,6 +64,12 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 # Create writable directories (for --read-only runtime)
 RUN mkdir -p /workspace /run/zmq /home/node/.claude /tmp && \
     chown node:node /workspace /run/zmq /home/node/.claude
+
+# OCI image labels for version tracking and staleness detection
+LABEL org.opencontainers.image.revision="${GIT_SHA}" \
+      org.opencontainers.image.version="${CARAPACE_VERSION}" \
+      ai.carapace.claude-code-version="${CLAUDE_CODE_VERSION}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 
 USER node
 

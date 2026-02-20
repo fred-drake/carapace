@@ -117,6 +117,40 @@ describe('Dockerfile', () => {
   });
 
   // -----------------------------------------------------------------------
+  // OCI labels
+  // -----------------------------------------------------------------------
+
+  describe('OCI labels', () => {
+    it('accepts CARAPACE_VERSION build arg', () => {
+      expect(hasLine(/ARG\s+CARAPACE_VERSION/)).toBe(true);
+    });
+
+    it('accepts GIT_SHA build arg', () => {
+      expect(hasLine(/ARG\s+GIT_SHA/)).toBe(true);
+    });
+
+    it('accepts BUILD_DATE build arg', () => {
+      expect(hasLine(/ARG\s+BUILD_DATE/)).toBe(true);
+    });
+
+    it('sets image revision label', () => {
+      expect(hasLine(/org\.opencontainers\.image\.revision/)).toBe(true);
+    });
+
+    it('sets image version label', () => {
+      expect(hasLine(/org\.opencontainers\.image\.version/)).toBe(true);
+    });
+
+    it('sets Claude Code version label', () => {
+      expect(hasLine(/ai\.carapace\.claude-code-version/)).toBe(true);
+    });
+
+    it('sets image created label', () => {
+      expect(hasLine(/org\.opencontainers\.image\.created/)).toBe(true);
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // ZeroMQ dependency
   // -----------------------------------------------------------------------
 
