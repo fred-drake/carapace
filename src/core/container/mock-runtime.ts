@@ -15,6 +15,7 @@ import type {
   ContainerHandle,
   ContainerState,
   RuntimeName,
+  ImageBuildOptions,
 } from './runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -82,6 +83,15 @@ export class MockContainerRuntime implements ContainerRuntime {
 
   async loadImage(_source: string): Promise<void> {
     // No-op in mock.
+  }
+
+  async build(options: ImageBuildOptions): Promise<string> {
+    this.images.add(options.tag);
+    return `mock-image-${options.tag}`;
+  }
+
+  async inspectLabels(_image: string): Promise<Record<string, string>> {
+    return {};
   }
 
   // -----------------------------------------------------------------------
