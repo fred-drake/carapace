@@ -109,6 +109,9 @@ export class Server {
     this.provisioner = new SocketProvisioner(provisionerOpts);
     this.provisioner.ensureDirectory();
 
+    // 1a. Clean up stale socket files from previous crashed sessions
+    this.provisioner.cleanupStale(new Set());
+
     // 2. Provision socket paths for the server
     const provision = this.provisioner.provision(SERVER_SESSION_ID);
 
