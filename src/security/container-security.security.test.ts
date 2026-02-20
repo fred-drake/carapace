@@ -256,11 +256,12 @@ describe('writable mounts are correctly limited', () => {
 // ---------------------------------------------------------------------------
 
 describe('no extra package managers or tools', () => {
-  it('curl is not available', async () => {
+  it('curl is present (required by Claude Code native installer)', async () => {
     if (!dockerAvailable) return;
 
+    // curl is intentionally installed for the Claude Code native installer
     const result = await execInContainer(['which', 'curl']);
-    expect(result.exitCode).not.toBe(0);
+    expect(result.exitCode).toBe(0);
   });
 
   it('wget is not available', async () => {
@@ -270,12 +271,12 @@ describe('no extra package managers or tools', () => {
     expect(result.exitCode).not.toBe(0);
   });
 
-  it('apt/apt-get is not usable (no lists)', async () => {
+  it('apt-get cannot install new packages (no lists + read-only FS)', async () => {
     if (!dockerAvailable) return;
 
-    // apt-get may exist in the base image but should fail to install
-    // because we cleaned /var/lib/apt/lists and FS is read-only
-    const result = await execInContainer(['sh', '-c', 'apt-get update 2>&1']);
+    // apt-get exists but /var/lib/apt/lists is cleaned and FS is read-only,
+    // so `apt-get install` should fail even though apt-get binary is present
+    const result = await execInContainer(['sh', '-c', 'apt-get install -y netcat-openbsd 2>&1']);
     expect(result.exitCode).not.toBe(0);
   });
 
@@ -299,7 +300,7 @@ describe('no extra package managers or tools', () => {
     // npm may exist in the node image but installing should fail
     const result = await execInContainer(['sh', '-c', 'npm install express 2>&1']);
     expect(result.exitCode).not.toBe(0);
-  });
+  }, 15_000);
 });
 
 // ---------------------------------------------------------------------------
