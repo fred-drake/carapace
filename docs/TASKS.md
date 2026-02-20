@@ -10,6 +10,8 @@
 > Updated (2026-02-19) — Waves 10-14 P2 tasks marked DONE (PRs #68-91).
 > Updated (2026-02-19) — Phase E2E tasks added and completed (ENG-24 through
 > ENG-28, QA-11, PRs #103-108). End-to-end plumbing validated.
+> Updated (2026-02-19) — Phase IMG image versioning tasks added and completed
+> (IMG-01 through IMG-08, PRs #120-128).
 > Organized by priority tier, then by role. Tasks reference each other by ID.
 
 ## Legend
@@ -2176,6 +2178,85 @@ ENG-24 (ZmqSocketFactory) ✓
 
 ---
 
+## Phase IMG — Container Image Versioning
+
+Composite image tags, OCI labels, staleness detection, and auto-rebuild.
+Prevents host/container version skew during development and upgrades.
+
+### ~~IMG-01: Add build() and inspectLabels() to ContainerRuntime~~ DONE
+
+**Status**: Completed (PR #121, merged 2026-02-19)
+
+- **Priority**: P1 | **Complexity**: M | **Role**: ENG
+- Extend ContainerRuntime interface with `build(options)` and
+  `inspectLabels(image)`. Implement in Docker, Podman, Apple Containers.
+- `ImageBuildOptions` type: contextDir, dockerfile?, tag, buildArgs?, labels?
+
+### ~~IMG-02: Create image-identity module~~ DONE
+
+**Status**: Completed (PR #122, merged 2026-02-19)
+
+- **Priority**: P1 | **Complexity**: S | **Role**: ENG
+- `src/core/image-identity.ts` — resolveGitSha, isImageCurrent, compositeTag,
+  parseLabels. OCI label key constants.
+- **Depends on**: IMG-01
+
+### ~~IMG-03: Create image-builder module~~ DONE
+
+**Status**: Completed (PR #124, merged 2026-02-19)
+
+- **Priority**: P1 | **Complexity**: M | **Role**: ENG
+- `src/core/image-builder.ts` — buildImage() orchestrates version resolution,
+  build args, OCI labels, post-build label verification.
+- **Depends on**: IMG-02
+
+### ~~IMG-04: Wire image build into update command~~ DONE
+
+**Status**: Completed (PR #127, merged 2026-02-19)
+
+- **Priority**: P1 | **Complexity**: S | **Role**: ENG
+- Add optional `buildImage` and `projectRoot` to UpdateCommandDeps.
+  Call buildImage after image digest pinning in update flow.
+- **Depends on**: IMG-03
+
+### ~~IMG-05: Wire staleness check into start + SKIP_IMAGE_BUILD~~ DONE
+
+**Status**: Completed (PR #126, merged 2026-02-19)
+
+- **Priority**: P1 | **Complexity**: M | **Role**: ENG
+- Add optional image deps to CliDeps. Check staleness before container spawn.
+  `SKIP_IMAGE_BUILD=1` bypasses check during development.
+- **Depends on**: IMG-03
+
+### ~~IMG-06: Add OCI label ARGs to Dockerfile~~ DONE
+
+**Status**: Completed (PR #120, merged 2026-02-19)
+
+- **Priority**: P1 | **Complexity**: S | **Role**: DEVOPS
+- Add CARAPACE_VERSION, GIT_SHA, BUILD_DATE build ARGs and 4 OCI LABELs to
+  Dockerfile runtime stage.
+
+### ~~IMG-07: Add image version reporting to carapace doctor~~ DONE
+
+**Status**: Completed (PR #125, merged 2026-02-19)
+
+- **Priority**: P2 | **Complexity**: S | **Role**: DX
+- Add checkImageVersion health check. Reports pass (current), warn (stale),
+  fail (missing), or pass (not configured).
+- **Depends on**: IMG-02
+
+### ~~IMG-08: Image versioning test coverage~~ DONE
+
+**Status**: Completed (PR #128, merged 2026-02-19)
+
+- **Priority**: P2 | **Complexity**: M | **Role**: QA
+- 18 new tests across cli.test.ts, image-identity.test.ts,
+  image-builder.test.ts, health-checks.test.ts. Covers state machine,
+  failure modes, edge cases, and integration flows.
+- **Depends on**: IMG-05, IMG-07
+
+---
+
 ## Task Summary
 
 | Category  |   Count |     P0 |     P1 |     P2 |
@@ -2186,4 +2267,5 @@ ENG-24 (ZmqSocketFactory) ✓
 | DEVOPS    |      20 |      2 |     12 |      6 |
 | DX        |      14 |      0 |      6 |      8 |
 | QA        |      12 |      5 |      3 |      4 |
-| **Total** | **100** | **14** | **49** | **37** |
+| IMG       |       8 |      0 |      6 |      2 |
+| **Total** | **108** | **14** | **55** | **39** |
