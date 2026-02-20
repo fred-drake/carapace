@@ -157,6 +157,24 @@ export interface ContainerState {
 }
 
 // ---------------------------------------------------------------------------
+// Image build options
+// ---------------------------------------------------------------------------
+
+/** Options for building a container image. */
+export interface ImageBuildOptions {
+  /** Path to the build context directory. */
+  contextDir: string;
+  /** Path to the Dockerfile (relative to contextDir or absolute). */
+  dockerfile?: string;
+  /** Tag for the built image (e.g. "carapace:2.1.49-abc1234"). */
+  tag: string;
+  /** Build arguments passed as --build-arg. */
+  buildArgs?: Record<string, string>;
+  /** OCI labels to embed in the image. */
+  labels?: Record<string, string>;
+}
+
+// ---------------------------------------------------------------------------
 // Container runtime interface
 // ---------------------------------------------------------------------------
 
@@ -206,6 +224,12 @@ export interface ContainerRuntime {
    * @param source - Absolute path to the tarball file.
    */
   loadImage(source: string): Promise<void>;
+
+  /** Build a container image and return the image ID. */
+  build(options: ImageBuildOptions): Promise<string>;
+
+  /** Read OCI labels from a local image. Returns label key-value pairs. */
+  inspectLabels(image: string): Promise<Record<string, string>>;
 
   // -- Container lifecycle --------------------------------------------------
 

@@ -19,6 +19,7 @@ import type {
   ContainerRunOptions,
   ContainerHandle,
   ContainerState,
+  ImageBuildOptions,
 } from './runtime.js';
 
 const execFileAsync = promisify(execFileCb);
@@ -152,6 +153,33 @@ export class DockerRuntime implements ContainerRuntime {
 
   async loadImage(source: string): Promise<void> {
     await this.docker('load', '-i', source);
+  }
+
+  async build(options: ImageBuildOptions): Promise<string> {
+    const args: string[] = ['build', '-t', options.tag];
+    if (options.dockerfile) {
+      args.push('-f', options.dockerfile);
+    }
+    if (options.buildArgs) {
+      for (const [key, value] of Object.entries(options.buildArgs)) {
+        args.push('--build-arg', `${key}=${value}`);
+      }
+    }
+    if (options.labels) {
+      for (const [key, value] of Object.entries(options.labels)) {
+        args.push('--label', `${key}=${value}`);
+      }
+    }
+    args.push(options.contextDir);
+    await this.docker(...args);
+    const { stdout: idOut } = await this.docker('images', '-q', options.tag);
+    return idOut.trim();
+  }
+
+  async inspectLabels(image: string): Promise<Record<string, string>> {
+    const { stdout } = await this.docker('inspect', '--format', '{{json .Config.Labels}}', image);
+    const parsed = JSON.parse(stdout.trim());
+    return parsed ?? {};
   }
 
   // -----------------------------------------------------------------------

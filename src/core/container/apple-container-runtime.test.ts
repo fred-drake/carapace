@@ -443,6 +443,89 @@ describe('AppleContainerRuntime', () => {
   });
 
   // -----------------------------------------------------------------------
+  // build
+  // -----------------------------------------------------------------------
+
+  describe('build', () => {
+    it('builds with just tag and contextDir', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'build output\n', stderr: '' });
+      mock.handler.mockResolvedValueOnce({ stdout: 'sha256:abc123\n', stderr: '' });
+
+      const id = await runtime.build({ tag: 'carapace:latest', contextDir: '/src' });
+
+      expect(id).toBe('sha256:abc123');
+      expect(mock.calls[0].args).toEqual(['build', '-t', 'carapace:latest', '/src']);
+      expect(mock.calls[1].args).toEqual(['images', '-q', 'carapace:latest']);
+    });
+
+    it('builds with dockerfile, buildArgs, and labels', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: '', stderr: '' });
+      mock.handler.mockResolvedValueOnce({ stdout: 'sha256:def456\n', stderr: '' });
+
+      const id = await runtime.build({
+        tag: 'carapace:v2',
+        contextDir: '/project',
+        dockerfile: 'Dockerfile.prod',
+        buildArgs: { NODE_ENV: 'production', VERSION: '2.0' },
+        labels: { 'org.opencontainers.image.version': '2.0', 'com.carapace.commit': 'abc' },
+      });
+
+      expect(id).toBe('sha256:def456');
+      const args = mock.calls[0].args;
+      expect(args).toContain('-f');
+      expect(args[args.indexOf('-f') + 1]).toBe('Dockerfile.prod');
+      expect(args).toContain('--build-arg');
+      expect(args).toContain('NODE_ENV=production');
+      expect(args).toContain('VERSION=2.0');
+      expect(args).toContain('--label');
+      expect(args).toContain('org.opencontainers.image.version=2.0');
+      expect(args).toContain('com.carapace.commit=abc');
+      expect(args[args.length - 1]).toBe('/project');
+    });
+
+    it('throws on build failure', async () => {
+      mock.handler.mockRejectedValueOnce(new Error('build failed'));
+      await expect(runtime.build({ tag: 'bad:latest', contextDir: '/src' })).rejects.toThrow();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // inspectLabels
+  // -----------------------------------------------------------------------
+
+  describe('inspectLabels', () => {
+    it('returns parsed labels', async () => {
+      mock.handler.mockResolvedValueOnce({
+        stdout: JSON.stringify({ 'com.carapace.version': '1.0', 'com.carapace.commit': 'abc123' }),
+        stderr: '',
+      });
+
+      const labels = await runtime.inspectLabels('carapace:latest');
+
+      expect(labels).toEqual({ 'com.carapace.version': '1.0', 'com.carapace.commit': 'abc123' });
+      expect(mock.calls[0].args).toEqual([
+        'inspect',
+        '--format',
+        '{{json .Config.Labels}}',
+        'carapace:latest',
+      ]);
+    });
+
+    it('returns empty object when no labels', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'null', stderr: '' });
+
+      const labels = await runtime.inspectLabels('carapace:latest');
+
+      expect(labels).toEqual({});
+    });
+
+    it('throws for a non-existent image', async () => {
+      mock.handler.mockRejectedValueOnce(new Error('No such image'));
+      await expect(runtime.inspectLabels('nonexistent:latest')).rejects.toThrow();
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // custom binary path
   // -----------------------------------------------------------------------
 
