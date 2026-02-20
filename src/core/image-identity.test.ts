@@ -39,6 +39,26 @@ describe('image-identity', () => {
     it('returns false when revision label is missing', () => {
       expect(isImageCurrent({}, 'abc1234')).toBe(false);
     });
+
+    it('returns true when extra labels are present alongside revision', () => {
+      const labels = {
+        [LABEL_REVISION]: 'abc1234',
+        [LABEL_VERSION]: '0.1.0',
+        [LABEL_CLAUDE_VERSION]: '2.1.49',
+        'some.unrelated.label': 'value',
+      };
+      expect(isImageCurrent(labels, 'abc1234')).toBe(true);
+    });
+
+    it('returns false when labels use wrong key names', () => {
+      const labels = { 'wrong.key': 'abc1234' };
+      expect(isImageCurrent(labels, 'abc1234')).toBe(false);
+    });
+
+    it('is case-sensitive for SHA comparison', () => {
+      const labels = { [LABEL_REVISION]: 'ABC1234' };
+      expect(isImageCurrent(labels, 'abc1234')).toBe(false);
+    });
   });
 
   describe('compositeTag', () => {

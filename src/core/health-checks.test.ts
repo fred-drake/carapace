@@ -419,4 +419,63 @@ describe('checkImageVersion', () => {
     expect(check!.status).toBe('pass');
     expect(check!.detail).toContain('not configured');
   });
+
+  it('fails when image has empty labels', async () => {
+    const deps = createTestDeps({
+      inspectImageLabels: vi.fn().mockResolvedValue({}),
+      resolveGitSha: vi.fn().mockResolvedValue('abc1234'),
+      imageName: 'carapace:latest',
+    });
+    const results = await runAllChecks(deps);
+    const check = results.find((r) => r.name === 'image-version');
+    expect(check!.status).toBe('fail');
+    expect(check!.detail).toContain('no version labels');
+  });
+
+  it('passes without staleness check when resolveGitSha is not configured', async () => {
+    const deps = createTestDeps({
+      inspectImageLabels: vi.fn().mockResolvedValue({
+        'org.opencontainers.image.revision': 'abc1234',
+        'ai.carapace.claude-code-version': '2.1.49',
+      }),
+      imageName: 'carapace:latest',
+      // No resolveGitSha
+    });
+    const results = await runAllChecks(deps);
+    const check = results.find((r) => r.name === 'image-version');
+    expect(check!.status).toBe('pass');
+    expect(check!.detail).toContain('2.1.49');
+  });
+
+  it('passes when resolveGitSha throws (git not available)', async () => {
+    const deps = createTestDeps({
+      inspectImageLabels: vi.fn().mockResolvedValue({
+        'org.opencontainers.image.revision': 'abc1234',
+        'ai.carapace.claude-code-version': '2.1.49',
+      }),
+      resolveGitSha: vi.fn().mockRejectedValue(new Error('git not found')),
+      imageName: 'carapace:latest',
+    });
+    const results = await runAllChecks(deps);
+    const check = results.find((r) => r.name === 'image-version');
+    // Should still pass — can't check staleness but image has valid labels
+    expect(check!.status).toBe('pass');
+    expect(check!.detail).toContain('2.1.49');
+  });
+
+  it('includes fix suggestion when image is stale', async () => {
+    const deps = createTestDeps({
+      inspectImageLabels: vi.fn().mockResolvedValue({
+        'org.opencontainers.image.revision': 'abc1234',
+        'org.opencontainers.image.version': '0.0.1',
+        'ai.carapace.claude-code-version': '2.1.49',
+        'org.opencontainers.image.created': '2026-02-20T00:00:00Z',
+      }),
+      resolveGitSha: vi.fn().mockResolvedValue('def5678'),
+      imageName: 'carapace:latest',
+    });
+    const results = await runAllChecks(deps);
+    const check = results.find((r) => r.name === 'image-version');
+    expect(check!.fix).toContain('carapace update');
+  });
 });
