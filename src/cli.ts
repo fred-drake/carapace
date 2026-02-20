@@ -26,6 +26,7 @@ import {
   type ValidationResult,
   type CredentialInfo,
 } from './auth-command.js';
+import { isImageCurrent } from './core/image-identity.js';
 
 // ---------------------------------------------------------------------------
 // CLI dependency injection
@@ -103,6 +104,22 @@ export interface CliDeps {
   fileStat: (path: string) => CredentialInfo | null;
   /** Create a server instance for the start command. Optional — omit in tests. */
   startServer?: () => { start: () => Promise<void>; stop: () => Promise<void> };
+  /** Resolve current git SHA. */
+  resolveGitSha?: () => Promise<string>;
+  /** Inspect OCI labels on an image. */
+  inspectImageLabels?: (image: string) => Promise<Record<string, string>>;
+  /** Build the container image. */
+  buildImage?: (contextDir: string) => Promise<{
+    tag: string;
+    gitSha: string;
+    claudeVersion: string;
+    carapaceVersion: string;
+    buildDate: string;
+  }>;
+  /** Path to the project root (build context). */
+  projectRoot?: string;
+  /** Default image name to check/use. */
+  imageName?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -283,6 +300,68 @@ export async function start(deps: CliDeps): Promise<number> {
     }
     // Stale PID file — clean it up
     deps.removePidFile();
+  }
+
+  // Image staleness check
+  const skipBuild = process.env.SKIP_IMAGE_BUILD === '1';
+
+  if (
+    deps.imageName &&
+    deps.inspectImageLabels &&
+    deps.resolveGitSha &&
+    deps.buildImage &&
+    deps.projectRoot
+  ) {
+    if (skipBuild) {
+      deps.stdout('Skipping image build check (SKIP_IMAGE_BUILD=1)');
+      // Verify image at least exists
+      const runtime = deps.runtimes.find((r) => r.name);
+      if (runtime) {
+        try {
+          const exists = await runtime.imageExists(deps.imageName);
+          if (!exists) {
+            deps.stderr(
+              'No container image found. Run `carapace update` or unset SKIP_IMAGE_BUILD.',
+            );
+            return 1;
+          }
+        } catch {
+          // Can't check — proceed anyway
+        }
+      }
+    } else {
+      try {
+        const currentSha = await deps.resolveGitSha();
+        let needsBuild = false;
+
+        try {
+          const labels = await deps.inspectImageLabels(deps.imageName);
+          if (!isImageCurrent(labels, currentSha)) {
+            deps.stdout('Image stale, rebuilding...');
+            needsBuild = true;
+          }
+        } catch {
+          // Image doesn't exist or can't be inspected
+          deps.stdout('Container image not found, building...');
+          needsBuild = true;
+        }
+
+        if (needsBuild) {
+          try {
+            const identity = await deps.buildImage(deps.projectRoot);
+            deps.stdout(`Image built: ${identity.tag}`);
+          } catch (err) {
+            deps.stderr(`Image build failed: ${err instanceof Error ? err.message : String(err)}`);
+            return 1;
+          }
+        }
+      } catch (err) {
+        // Git SHA resolution failed — skip staleness check
+        deps.stderr(
+          `Warning: Could not check image staleness: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   // Initialize directory structure
