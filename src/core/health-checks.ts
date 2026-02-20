@@ -315,8 +315,8 @@ export function checkStaleSockets(
  */
 export function checkSocketPathLength(socketPath: string, platform: string): HealthCheckResult {
   const limit = platform === 'darwin' ? 104 : 108;
-  // Worst-case session ID: "session-" + UUID (36 chars) + "-request.sock" (13 chars)
-  const worstCaseSuffix = '/session-01234567-89ab-cdef-0123-456789abcdef-request.sock';
+  // Session IDs are crypto.randomUUID() (36 chars) + "-request.sock" (13 chars)
+  const worstCaseSuffix = '/01234567-89ab-cdef-0123-456789abcdef-request.sock';
   const worstCasePath = socketPath + worstCaseSuffix;
 
   if (worstCasePath.length <= limit) {
