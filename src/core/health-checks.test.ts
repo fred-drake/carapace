@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   checkNodeVersion,
   checkContainerRuntime,
@@ -10,11 +10,33 @@ import {
   checkSocketPermissions,
   checkStaleSockets,
   checkSocketPathLength,
+  checkImageVersion,
   runAllChecks,
   type HealthCheckResult,
   type HealthCheckDeps,
 } from './health-checks.js';
 import { MockContainerRuntime } from './container/mock-runtime.js';
+
+// ---------------------------------------------------------------------------
+// Helper
+// ---------------------------------------------------------------------------
+
+function createTestDeps(overrides?: Partial<HealthCheckDeps>): HealthCheckDeps {
+  return {
+    nodeVersion: 'v22.5.0',
+    runtimes: [new MockContainerRuntime('docker')],
+    exec: async () => ({ stdout: '10.0.0\n', stderr: '' }),
+    resolveModule: () => '/path/to/module',
+    pluginDirs: [],
+    socketPath: '/run/sockets',
+    dirExists: () => true,
+    isWritable: () => true,
+    fileMode: () => 0o40700,
+    listDir: () => [],
+    platform: 'linux',
+    ...overrides,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // checkNodeVersion
@@ -283,23 +305,6 @@ describe('checkSocketPathLength', () => {
 // ---------------------------------------------------------------------------
 
 describe('runAllChecks', () => {
-  function createTestDeps(overrides?: Partial<HealthCheckDeps>): HealthCheckDeps {
-    return {
-      nodeVersion: 'v22.5.0',
-      runtimes: [new MockContainerRuntime('docker')],
-      exec: async () => ({ stdout: '10.0.0\n', stderr: '' }),
-      resolveModule: () => '/path/to/module',
-      pluginDirs: [],
-      socketPath: '/run/sockets',
-      dirExists: () => true,
-      isWritable: () => true,
-      fileMode: () => 0o40700,
-      listDir: () => [],
-      platform: 'linux',
-      ...overrides,
-    };
-  }
-
   it('returns results for all checks', async () => {
     const results = await runAllChecks(createTestDeps());
     expect(results.length).toBeGreaterThanOrEqual(7);
@@ -352,5 +357,66 @@ describe('runAllChecks', () => {
       expect(f.fix).toBeDefined();
       expect(f.fix!.length).toBeGreaterThan(0);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkImageVersion
+// ---------------------------------------------------------------------------
+
+describe('checkImageVersion', () => {
+  it('passes when image is current', async () => {
+    const deps = createTestDeps({
+      inspectImageLabels: vi.fn().mockResolvedValue({
+        'org.opencontainers.image.revision': 'abc1234',
+        'org.opencontainers.image.version': '0.0.1',
+        'ai.carapace.claude-code-version': '2.1.49',
+        'org.opencontainers.image.created': '2026-02-20T00:00:00Z',
+      }),
+      resolveGitSha: vi.fn().mockResolvedValue('abc1234'),
+      imageName: 'carapace:latest',
+    });
+    const results = await runAllChecks(deps);
+    const check = results.find((r) => r.name === 'image-version');
+    expect(check).toBeDefined();
+    expect(check!.status).toBe('pass');
+    expect(check!.detail).toContain('2.1.49');
+  });
+
+  it('warns when image is stale', async () => {
+    const deps = createTestDeps({
+      inspectImageLabels: vi.fn().mockResolvedValue({
+        'org.opencontainers.image.revision': 'abc1234',
+        'org.opencontainers.image.version': '0.0.1',
+        'ai.carapace.claude-code-version': '2.1.49',
+        'org.opencontainers.image.created': '2026-02-20T00:00:00Z',
+      }),
+      resolveGitSha: vi.fn().mockResolvedValue('def5678'),
+      imageName: 'carapace:latest',
+    });
+    const results = await runAllChecks(deps);
+    const check = results.find((r) => r.name === 'image-version');
+    expect(check!.status).toBe('warn');
+    expect(check!.detail).toContain('abc1234');
+    expect(check!.detail).toContain('def5678');
+  });
+
+  it('fails when image not found', async () => {
+    const deps = createTestDeps({
+      inspectImageLabels: vi.fn().mockRejectedValue(new Error('not found')),
+      resolveGitSha: vi.fn().mockResolvedValue('abc1234'),
+      imageName: 'carapace:latest',
+    });
+    const results = await runAllChecks(deps);
+    const check = results.find((r) => r.name === 'image-version');
+    expect(check!.status).toBe('fail');
+  });
+
+  it('passes with not-configured when deps are missing', async () => {
+    const deps = createTestDeps();
+    const results = await runAllChecks(deps);
+    const check = results.find((r) => r.name === 'image-version');
+    expect(check!.status).toBe('pass');
+    expect(check!.detail).toContain('not configured');
   });
 });

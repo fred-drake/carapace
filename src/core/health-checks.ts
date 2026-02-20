@@ -12,6 +12,7 @@
  */
 
 import type { ContainerRuntime } from './container/runtime.js';
+import { isImageCurrent, parseLabels } from './image-identity.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -56,6 +57,12 @@ export interface HealthCheckDeps {
   listDir: (path: string) => string[];
   /** Host platform (e.g. "darwin", "linux"). */
   platform: string;
+  /** Inspect OCI labels on a container image. */
+  inspectImageLabels?: (image: string) => Promise<Record<string, string>>;
+  /** Resolve current git SHA for image staleness check. */
+  resolveGitSha?: () => Promise<string>;
+  /** Image name to inspect. */
+  imageName?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +345,70 @@ export function checkSocketPathLength(socketPath: string, platform: string): Hea
   };
 }
 
+/**
+ * Check container image version and staleness.
+ * Reports image identity (git SHA, Claude Code version, Carapace version).
+ * Warns if the image is stale (built from a different git SHA than HEAD).
+ */
+export async function checkImageVersion(deps: HealthCheckDeps): Promise<HealthCheckResult> {
+  if (!deps.inspectImageLabels || !deps.imageName) {
+    return {
+      name: 'image-version',
+      label: 'Container image',
+      status: 'pass',
+      detail: 'Image checks not configured',
+    };
+  }
+
+  try {
+    const labels = await deps.inspectImageLabels(deps.imageName);
+    const identity = parseLabels(labels);
+
+    if (!identity) {
+      return {
+        name: 'image-version',
+        label: 'Container image',
+        status: 'fail',
+        detail: 'Image exists but has no version labels',
+        fix: 'Rebuild the image with `carapace update`',
+      };
+    }
+
+    // Check staleness if git SHA resolution is available
+    if (deps.resolveGitSha) {
+      try {
+        const currentSha = await deps.resolveGitSha();
+        if (!isImageCurrent(labels, currentSha)) {
+          return {
+            name: 'image-version',
+            label: 'Container image',
+            status: 'warn',
+            detail: `Image built from ${identity.gitSha}, current HEAD is ${currentSha} (Claude Code ${identity.claudeVersion})`,
+            fix: 'Run `carapace update` to rebuild the image',
+          };
+        }
+      } catch {
+        // Git not available — skip staleness check, still report identity
+      }
+    }
+
+    return {
+      name: 'image-version',
+      label: 'Container image',
+      status: 'pass',
+      detail: `${identity.tag} (Claude Code ${identity.claudeVersion}, Carapace ${identity.carapaceVersion})`,
+    };
+  } catch {
+    return {
+      name: 'image-version',
+      label: 'Container image',
+      status: 'fail',
+      detail: 'Container image not found',
+      fix: 'Run `carapace update` to build the image',
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
@@ -356,6 +427,7 @@ export async function runAllChecks(deps: HealthCheckDeps): Promise<HealthCheckRe
   results.push(checkSocketPermissions(deps.socketPath, deps.fileMode));
   results.push(checkStaleSockets(deps.socketPath, deps.listDir));
   results.push(checkSocketPathLength(deps.socketPath, deps.platform));
+  results.push(await checkImageVersion(deps));
 
   return results;
 }
