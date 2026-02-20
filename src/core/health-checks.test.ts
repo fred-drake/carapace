@@ -7,6 +7,9 @@ import {
   checkSqlite,
   checkPluginDirs,
   checkSocketPath,
+  checkSocketPermissions,
+  checkStaleSockets,
+  checkSocketPathLength,
   runAllChecks,
   type HealthCheckResult,
   type HealthCheckDeps,
@@ -185,6 +188,97 @@ describe('checkSocketPath', () => {
 });
 
 // ---------------------------------------------------------------------------
+// checkSocketPermissions
+// ---------------------------------------------------------------------------
+
+describe('checkSocketPermissions', () => {
+  it('passes when permissions are 0700', () => {
+    const result = checkSocketPermissions('/run/sockets', () => 0o40700);
+    expect(result.status).toBe('pass');
+    expect(result.detail).toContain('700');
+  });
+
+  it('fails when permissions are too open (0755)', () => {
+    const result = checkSocketPermissions('/run/sockets', () => 0o40755);
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('755');
+    expect(result.fix).toMatch(/chmod 700/);
+  });
+
+  it('fails when permissions are 0777', () => {
+    const result = checkSocketPermissions('/run/sockets', () => 0o40777);
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('777');
+  });
+
+  it('warns when permissions cannot be read', () => {
+    const result = checkSocketPermissions('/run/sockets', () => null);
+    expect(result.status).toBe('warn');
+    expect(result.fix).toMatch(/mkdir/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkStaleSockets
+// ---------------------------------------------------------------------------
+
+describe('checkStaleSockets', () => {
+  it('passes when no socket files exist', () => {
+    const result = checkStaleSockets('/run/sockets', () => []);
+    expect(result.status).toBe('pass');
+  });
+
+  it('passes when directory has non-sock files', () => {
+    const result = checkStaleSockets('/run/sockets', () => ['readme.txt', '.gitkeep']);
+    expect(result.status).toBe('pass');
+  });
+
+  it('warns when stale socket files are found', () => {
+    const result = checkStaleSockets('/run/sockets', () => [
+      'server-request.sock',
+      'server-events.sock',
+    ]);
+    expect(result.status).toBe('warn');
+    expect(result.detail).toContain('2 stale');
+    expect(result.fix).toMatch(/rm/);
+  });
+
+  it('includes socket filenames in detail', () => {
+    const result = checkStaleSockets('/run/sockets', () => ['old-session-request.sock']);
+    expect(result.detail).toContain('old-session-request.sock');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkSocketPathLength
+// ---------------------------------------------------------------------------
+
+describe('checkSocketPathLength', () => {
+  it('passes for short paths on linux', () => {
+    const result = checkSocketPathLength('/run/sockets', 'linux');
+    expect(result.status).toBe('pass');
+  });
+
+  it('passes for short paths on darwin', () => {
+    const result = checkSocketPathLength('/run/sockets', 'darwin');
+    expect(result.status).toBe('pass');
+  });
+
+  it('fails for very long paths on darwin (104-byte limit)', () => {
+    const longPath = '/a'.repeat(60);
+    const result = checkSocketPathLength(longPath, 'darwin');
+    expect(result.status).toBe('fail');
+    expect(result.detail).toContain('104');
+    expect(result.fix).toMatch(/shorter path/i);
+  });
+
+  it('includes platform in detail', () => {
+    const result = checkSocketPathLength('/run/sockets', 'darwin');
+    expect(result.detail).toContain('darwin');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // runAllChecks
 // ---------------------------------------------------------------------------
 
@@ -199,6 +293,9 @@ describe('runAllChecks', () => {
       socketPath: '/run/sockets',
       dirExists: () => true,
       isWritable: () => true,
+      fileMode: () => 0o40700,
+      listDir: () => [],
+      platform: 'linux',
       ...overrides,
     };
   }

@@ -59,6 +59,7 @@ function createTestDeps(overrides?: Partial<CliDeps>): CliDeps {
     fileExists: vi.fn().mockReturnValue(false),
     writeFileSecure: vi.fn(),
     fileStat: vi.fn().mockReturnValue(null),
+    fileMode: vi.fn().mockReturnValue(0o40700),
     ...overrides,
   };
 }
