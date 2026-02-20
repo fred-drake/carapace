@@ -67,7 +67,7 @@
             # Create executable wrapper
             mkdir -p $out/bin
             makeWrapper ${pkgs.nodejs_22}/bin/node $out/bin/carapace \
-              --add-flags "$out/lib/carapace/dist/index.js"
+              --add-flags "$out/lib/carapace/dist/main.js"
 
             runHook postInstall
           '';

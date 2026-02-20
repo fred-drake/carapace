@@ -114,8 +114,8 @@ describe('flake.nix — Nix build output', () => {
       expect(hasLine(/makeWrapper.*node.*carapace/)).toBe(true);
     });
 
-    it('wrapper points to dist/index.js', () => {
-      expect(hasLine(/dist\/index\.js/)).toBe(true);
+    it('wrapper points to dist/main.js', () => {
+      expect(hasLine(/dist\/main\.js/)).toBe(true);
     });
   });
 

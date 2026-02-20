@@ -99,6 +99,8 @@ export interface CliDeps {
   writeFileSecure: (path: string, content: string, mode: number) => void;
   /** Get file stat info, or null if not found. */
   fileStat: (path: string) => CredentialInfo | null;
+  /** Create a server instance for the start command. Optional — omit in tests. */
+  startServer?: () => { start: () => Promise<void>; stop: () => Promise<void> };
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +262,8 @@ export async function doctor(deps: CliDeps): Promise<number> {
  * 3. Load and validate configuration.
  * 4. Detect an available container runtime.
  * 5. Write PID file.
+ * 6. Start the server (if startServer dep is provided).
+ * 7. Block until SIGINT/SIGTERM (server mode).
  */
 export async function start(deps: CliDeps): Promise<number> {
   // Check if already running
@@ -308,6 +312,24 @@ export async function start(deps: CliDeps): Promise<number> {
   deps.stdout(`  Home:    ${deps.home}`);
   deps.stdout(`  Runtime: ${runtimeName}`);
   deps.stdout(`  Engine:  ${config.runtime.engine}`);
+
+  // Start server if factory is provided (production mode)
+  if (deps.startServer) {
+    const server = deps.startServer();
+    await server.start();
+
+    // Block until SIGINT or SIGTERM
+    await new Promise<void>((resolve) => {
+      const shutdown = () => {
+        void server.stop().then(() => {
+          deps.removePidFile();
+          resolve();
+        });
+      };
+      process.on('SIGINT', shutdown);
+      process.on('SIGTERM', shutdown);
+    });
+  }
 
   return 0;
 }
