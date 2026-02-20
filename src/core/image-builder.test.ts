@@ -122,5 +122,33 @@ describe('image-builder', () => {
 
       await expect(buildImage(deps, '/project')).rejects.toThrow('git not found');
     });
+
+    it('propagates resolveClaudeVersion errors', async () => {
+      const deps = createMockDeps({
+        resolveClaudeVersion: vi.fn().mockRejectedValue(new Error('version resolution failed')),
+      });
+
+      await expect(buildImage(deps, '/project')).rejects.toThrow('version resolution failed');
+    });
+
+    it('includes BUILD_DATE as ISO timestamp in build args', async () => {
+      const deps = createMockDeps();
+      await buildImage(deps, '/project');
+
+      const build = deps.runtime.build as ReturnType<typeof vi.fn>;
+      const opts = build.mock.calls[0][0];
+      // BUILD_DATE should be a valid ISO 8601 string
+      expect(() => new Date(opts.buildArgs.BUILD_DATE)).not.toThrow();
+      expect(new Date(opts.buildArgs.BUILD_DATE).toISOString()).toBe(opts.buildArgs.BUILD_DATE);
+    });
+
+    it('uses Dockerfile at context root by default', async () => {
+      const deps = createMockDeps();
+      await buildImage(deps, '/my/project');
+
+      const build = deps.runtime.build as ReturnType<typeof vi.fn>;
+      const opts = build.mock.calls[0][0];
+      expect(opts.contextDir).toBe('/my/project');
+    });
   });
 });

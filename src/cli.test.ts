@@ -663,4 +663,153 @@ describe('start image staleness check', () => {
       'Warning: Could not check image staleness: git not found',
     );
   });
+
+  it('treats empty labels object as stale and triggers rebuild', async () => {
+    const buildImage = vi.fn().mockResolvedValue({
+      tag: 'carapace:latest-abc1234',
+      gitSha: 'abc1234',
+      claudeVersion: 'latest',
+      carapaceVersion: '0.0.1',
+      buildDate: '2026-02-20T00:00:00Z',
+    });
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn().mockResolvedValue('abc1234'),
+      inspectImageLabels: vi.fn().mockResolvedValue({}),
+      buildImage,
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+    });
+    await start(deps);
+    expect(buildImage).toHaveBeenCalledWith('/project');
+    expect(deps.stdout).toHaveBeenCalledWith('Image stale, rebuilding...');
+  });
+
+  it('treats labels with wrong keys as stale', async () => {
+    const buildImage = vi.fn().mockResolvedValue({
+      tag: 'carapace:latest-abc1234',
+      gitSha: 'abc1234',
+      claudeVersion: 'latest',
+      carapaceVersion: '0.0.1',
+      buildDate: '2026-02-20T00:00:00Z',
+    });
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn().mockResolvedValue('abc1234'),
+      inspectImageLabels: vi.fn().mockResolvedValue({
+        'wrong.label.key': 'abc1234',
+        'another.wrong.key': '2.1.49',
+      }),
+      buildImage,
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+    });
+    await start(deps);
+    expect(buildImage).toHaveBeenCalled();
+  });
+
+  it('skips staleness check when image deps are not configured', async () => {
+    const deps = createTestDeps({
+      // No imageName, no inspectImageLabels, etc.
+    });
+    const code = await start(deps);
+    expect(code).toBe(0);
+    // Should not print any image-related messages
+    const stdoutCalls = (deps.stdout as ReturnType<typeof vi.fn>).mock.calls.flat();
+    const imageMessages = stdoutCalls.filter(
+      (msg: string) => typeof msg === 'string' && msg.toLowerCase().includes('image'),
+    );
+    expect(imageMessages).toHaveLength(0);
+  });
+
+  it('skips staleness check when only imageName is set (partial deps)', async () => {
+    const deps = createTestDeps({
+      imageName: 'carapace:latest',
+      // Missing other required deps
+    });
+    const code = await start(deps);
+    expect(code).toBe(0);
+  });
+
+  it('proceeds when SKIP_IMAGE_BUILD and imageExists check throws', async () => {
+    process.env.SKIP_IMAGE_BUILD = '1';
+    const runtime = new MockContainerRuntime('docker');
+    vi.spyOn(runtime, 'imageExists').mockRejectedValue(new Error('docker not responding'));
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn(),
+      inspectImageLabels: vi.fn(),
+      buildImage: vi.fn(),
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+      runtimes: [runtime],
+    });
+    const code = await start(deps);
+    // Should proceed despite imageExists throwing (catch block)
+    expect(code).toBe(0);
+  });
+
+  it('shows built image tag on successful rebuild', async () => {
+    const buildImage = vi.fn().mockResolvedValue({
+      tag: 'carapace:2.1.49-def5678',
+      gitSha: 'def5678',
+      claudeVersion: '2.1.49',
+      carapaceVersion: '0.1.0',
+      buildDate: '2026-02-20T12:00:00Z',
+    });
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn().mockResolvedValue('def5678'),
+      inspectImageLabels: vi.fn().mockResolvedValue({
+        'org.opencontainers.image.revision': 'abc1234',
+      }),
+      buildImage,
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+    });
+    await start(deps);
+    expect(deps.stdout).toHaveBeenCalledWith('Image built: carapace:2.1.49-def5678');
+  });
+
+  it('full flow: stale image detected, rebuilt, start continues', async () => {
+    const buildImage = vi.fn().mockResolvedValue({
+      tag: 'carapace:2.1.49-newsha1',
+      gitSha: 'newsha1',
+      claudeVersion: '2.1.49',
+      carapaceVersion: '0.1.0',
+      buildDate: '2026-02-20T12:00:00Z',
+    });
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn().mockResolvedValue('newsha1'),
+      inspectImageLabels: vi.fn().mockResolvedValue({
+        'org.opencontainers.image.revision': 'oldsha0',
+      }),
+      buildImage,
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+    });
+    const code = await start(deps);
+
+    // Should detect staleness, rebuild, and continue
+    expect(deps.stdout).toHaveBeenCalledWith('Image stale, rebuilding...');
+    expect(buildImage).toHaveBeenCalledWith('/project');
+    expect(deps.stdout).toHaveBeenCalledWith('Image built: carapace:2.1.49-newsha1');
+    // Should have continued to directory initialization
+    expect(deps.ensureDirs).toHaveBeenCalled();
+    expect(code).toBe(0);
+  });
+
+  it('full flow: current image, no rebuild, start continues', async () => {
+    const buildImage = vi.fn();
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn().mockResolvedValue('same123'),
+      inspectImageLabels: vi.fn().mockResolvedValue({
+        'org.opencontainers.image.revision': 'same123',
+      }),
+      buildImage,
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+    });
+    const code = await start(deps);
+
+    expect(buildImage).not.toHaveBeenCalled();
+    expect(deps.ensureDirs).toHaveBeenCalled();
+    expect(code).toBe(0);
+  });
 });
