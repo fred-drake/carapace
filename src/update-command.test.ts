@@ -370,4 +370,71 @@ describe('runUpdate', () => {
     expect(code).toBe(0);
     expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('already'));
   });
+
+  describe('image build integration', () => {
+    it('calls buildImage during update', async () => {
+      const buildImage = vi.fn().mockResolvedValue({
+        tag: 'carapace:2.1.49-abc1234',
+        gitSha: 'abc1234',
+        claudeVersion: '2.1.49',
+        carapaceVersion: '0.1.0',
+        buildDate: '2026-02-20T00:00:00Z',
+      });
+      const deps = createDeps({
+        buildImage,
+        projectRoot: '/path/to/project',
+      });
+
+      await runUpdate(deps, { yes: true });
+
+      expect(buildImage).toHaveBeenCalledWith('/path/to/project');
+      expect(deps.stdout).toHaveBeenCalledWith(
+        expect.stringContaining('Image built: carapace:2.1.49-abc1234'),
+      );
+    });
+
+    it('aborts update when buildImage fails', async () => {
+      const buildImage = vi.fn().mockRejectedValue(new Error('build failed'));
+      const deps = createDeps({
+        buildImage,
+        projectRoot: '/path/to/project',
+      });
+
+      const code = await runUpdate(deps, { yes: true });
+
+      expect(code).toBe(1);
+      expect(deps.stderr).toHaveBeenCalledWith(
+        expect.stringContaining('Image build failed: build failed'),
+      );
+      // Should NOT have extracted or swapped install
+      expect(deps.extractTarball).not.toHaveBeenCalled();
+      expect(deps.rename).not.toHaveBeenCalled();
+    });
+
+    it('skips image build when buildImage is not configured', async () => {
+      const deps = createDeps();
+      // No buildImage or projectRoot in deps
+
+      const code = await runUpdate(deps, { yes: true });
+
+      // Should succeed without any build step
+      expect(code).toBe(0);
+      expect(deps.stdout).not.toHaveBeenCalledWith(
+        expect.stringContaining('Building container image'),
+      );
+    });
+
+    it('skips image build when projectRoot is not configured', async () => {
+      const buildImage = vi.fn();
+      const deps = createDeps({
+        buildImage,
+        // No projectRoot
+      });
+
+      const code = await runUpdate(deps, { yes: true });
+
+      expect(code).toBe(0);
+      expect(buildImage).not.toHaveBeenCalled();
+    });
+  });
 });
