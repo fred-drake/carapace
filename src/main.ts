@@ -95,6 +95,14 @@ function isWritable(path: string): boolean {
   }
 }
 
+function fileMode(path: string): number | null {
+  try {
+    return statSync(path).mode;
+  } catch {
+    return null;
+  }
+}
+
 function dirSize(path: string): number {
   try {
     let total = 0;
@@ -219,6 +227,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
     socketPath: join(home, 'run', 'sockets'),
     dirExists,
     isWritable,
+    fileMode,
     userHome: homedir(),
     dirSize,
     removeDir: (path: string) => rmSync(path, { recursive: true, force: true }),

@@ -71,6 +71,8 @@ export interface CliDeps {
   dirExists: (path: string) => boolean;
   /** Check if a path is writable. */
   isWritable: (path: string) => boolean;
+  /** Return the octal permission mode of a path, or null if not found. */
+  fileMode: (path: string) => number | null;
   /** User's home directory. */
   userHome: string;
   /** Get total size of a directory in bytes. */
@@ -225,6 +227,9 @@ export async function doctor(deps: CliDeps): Promise<number> {
     socketPath: deps.socketPath,
     dirExists: deps.dirExists,
     isWritable: deps.isWritable,
+    fileMode: deps.fileMode,
+    listDir: deps.listDir,
+    platform: deps.platform,
   });
 
   for (const result of results) {

@@ -50,6 +50,12 @@ export interface HealthCheckDeps {
   socketPath: string;
   dirExists: (path: string) => boolean;
   isWritable: (path: string) => boolean;
+  /** Return the octal permission mode of a path (e.g. 0o700), or null if not found. */
+  fileMode: (path: string) => number | null;
+  /** List files in a directory, or empty array if it doesn't exist. */
+  listDir: (path: string) => string[];
+  /** Host platform (e.g. "darwin", "linux"). */
+  platform: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,6 +244,100 @@ export function checkSocketPath(
   };
 }
 
+/** Check that the socket directory has 0700 permissions (owner-only). */
+export function checkSocketPermissions(
+  socketPath: string,
+  fileMode: (path: string) => number | null,
+): HealthCheckResult {
+  const mode = fileMode(socketPath);
+  if (mode === null) {
+    return {
+      name: 'socket-permissions',
+      label: 'Socket permissions',
+      status: 'warn',
+      detail: `Cannot read permissions: ${socketPath}`,
+      fix: `Ensure directory exists: mkdir -p ${socketPath} && chmod 700 ${socketPath}`,
+    };
+  }
+
+  const perms = mode & 0o777;
+  if (perms === 0o700) {
+    return {
+      name: 'socket-permissions',
+      label: 'Socket permissions',
+      status: 'pass',
+      detail: `0${perms.toString(8)} (owner-only)`,
+    };
+  }
+
+  return {
+    name: 'socket-permissions',
+    label: 'Socket permissions',
+    status: 'fail',
+    detail: `0${perms.toString(8)} (expected 0700)`,
+    fix: `Fix permissions: chmod 700 ${socketPath}`,
+  };
+}
+
+/** Check for stale socket files left by crashed sessions. */
+export function checkStaleSockets(
+  socketPath: string,
+  listDir: (path: string) => string[],
+): HealthCheckResult {
+  const files = listDir(socketPath);
+  const sockFiles = files.filter((f) => f.endsWith('.sock'));
+
+  if (sockFiles.length === 0) {
+    return {
+      name: 'stale-sockets',
+      label: 'Stale sockets',
+      status: 'pass',
+      detail: 'No stale socket files',
+    };
+  }
+
+  return {
+    name: 'stale-sockets',
+    label: 'Stale sockets',
+    status: 'warn',
+    detail: `${sockFiles.length} stale socket file(s): ${sockFiles.join(', ')}`,
+    fix:
+      'These will be cleaned up on next start, or remove manually: rm ' +
+      sockFiles.map((f) => `${socketPath}/${f}`).join(' '),
+  };
+}
+
+/**
+ * Check that socket file paths won't exceed the Unix domain socket limit.
+ * macOS: 104 bytes, Linux: 108 bytes. The longest socket path is
+ * {socketPath}/{sessionId}-request.sock — we check with a realistic
+ * session ID length.
+ */
+export function checkSocketPathLength(socketPath: string, platform: string): HealthCheckResult {
+  const limit = platform === 'darwin' ? 104 : 108;
+  // Worst-case session ID: "session-" + UUID (36 chars) + "-request.sock" (13 chars)
+  const worstCaseSuffix = '/session-01234567-89ab-cdef-0123-456789abcdef-request.sock';
+  const worstCasePath = socketPath + worstCaseSuffix;
+
+  if (worstCasePath.length <= limit) {
+    return {
+      name: 'socket-path-length',
+      label: 'Socket path length',
+      status: 'pass',
+      detail: `${socketPath.length} chars (limit ${limit} for ${platform})`,
+    };
+  }
+
+  const maxSocketDir = limit - worstCaseSuffix.length;
+  return {
+    name: 'socket-path-length',
+    label: 'Socket path length',
+    status: 'fail',
+    detail: `${socketPath.length} chars — socket paths will exceed ${limit}-byte ${platform} limit`,
+    fix: `Move CARAPACE_HOME to a shorter path (socket dir must be under ${maxSocketDir} chars)`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
@@ -253,6 +353,9 @@ export async function runAllChecks(deps: HealthCheckDeps): Promise<HealthCheckRe
   results.push(checkSqlite(deps.resolveModule));
   results.push(checkPluginDirs(deps.pluginDirs, deps.dirExists));
   results.push(checkSocketPath(deps.socketPath, deps.isWritable));
+  results.push(checkSocketPermissions(deps.socketPath, deps.fileMode));
+  results.push(checkStaleSockets(deps.socketPath, deps.listDir));
+  results.push(checkSocketPathLength(deps.socketPath, deps.platform));
 
   return results;
 }
