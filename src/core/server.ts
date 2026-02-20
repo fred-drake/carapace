@@ -22,6 +22,7 @@ import { PluginLoader } from './plugin-loader.js';
 import { SessionManager } from './session-manager.js';
 import { ResponseSanitizer } from './response-sanitizer.js';
 import { MessageRouter } from './router.js';
+import { ECHO_TOOL_DECLARATION, echoToolHandler } from './intrinsic-echo.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -122,6 +123,9 @@ export class Server {
     this.toolCatalog = new ToolCatalog();
     this.sessionManager = new SessionManager();
     this.responseSanitizer = new ResponseSanitizer();
+
+    // 4a. Register intrinsic tools (always available, not filesystem-discovered)
+    this.toolCatalog.register(ECHO_TOOL_DECLARATION, echoToolHandler);
 
     this.pluginLoader = new PluginLoader({
       toolCatalog: this.toolCatalog,
