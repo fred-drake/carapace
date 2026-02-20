@@ -101,6 +101,18 @@ export interface ContainerRunOptions {
   user?: string;
   /** Override the image's default entrypoint. */
   entrypoint?: string[];
+  /**
+   * Data to pipe to the container's stdin after creation.
+   *
+   * Used for credential injection via the entrypoint script: credentials
+   * are written as `NAME=VALUE\n` lines followed by an empty line terminator.
+   * This ensures credentials never appear in `docker inspect`, image layers,
+   * or mounted files.
+   *
+   * When set, the runtime uses `docker create` + `docker start -ai` instead
+   * of `docker run -d`, allowing stdin to be piped to the entrypoint.
+   */
+  stdinData?: string;
 }
 
 // ---------------------------------------------------------------------------
