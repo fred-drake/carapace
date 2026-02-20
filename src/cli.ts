@@ -213,6 +213,9 @@ export async function runCommand(
  * displays results with fix suggestions for any failures.
  */
 export async function doctor(deps: CliDeps): Promise<number> {
+  // Ensure directory structure exists before checking writability
+  deps.ensureDirs(deps.home);
+
   const results = await runAllChecks({
     nodeVersion: deps.nodeVersion,
     runtimes: deps.runtimes,
