@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { DockerRuntime } from './docker-runtime.js';
+import type { SpawnFn } from './docker-runtime.js';
 import type { ContainerRuntime, ContainerRunOptions } from './runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -580,6 +581,125 @@ describe('DockerRuntime', () => {
       mock.handler.mockResolvedValueOnce({ stdout: 'info', stderr: '' });
       await runtime.isAvailable();
       expect(mock.calls[0].file).toBe('docker');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // stdinData (credential injection via stdin)
+  // -----------------------------------------------------------------------
+
+  describe('stdinData', () => {
+    let spawnCalls: { file: string; args: readonly string[]; stdinData: string }[];
+    let spawnFn: SpawnFn;
+    let runtimeWithSpawn: DockerRuntime;
+
+    beforeEach(() => {
+      spawnCalls = [];
+      spawnFn = (file, args, stdinData) => {
+        spawnCalls.push({ file, args, stdinData });
+      };
+      runtimeWithSpawn = new DockerRuntime({
+        exec: mock.exec,
+        spawn: spawnFn,
+      });
+    });
+
+    it('uses docker create instead of docker run when stdinData is set', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' });
+      await runtimeWithSpawn.run(
+        defaultRunOptions({ name: 'test-cred', stdinData: 'API_KEY=secret\n\n' }),
+      );
+      // First exec call should be 'create', not 'run'
+      expect(mock.calls[0].args[0]).toBe('create');
+    });
+
+    it('passes -i flag in create args for stdin support', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' });
+      await runtimeWithSpawn.run(
+        defaultRunOptions({ name: 'test-cred', stdinData: 'API_KEY=secret\n\n' }),
+      );
+      expect(mock.calls[0].args).toContain('-i');
+    });
+
+    it('does not pass -d flag in create args', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' });
+      await runtimeWithSpawn.run(
+        defaultRunOptions({ name: 'test-cred', stdinData: 'API_KEY=secret\n\n' }),
+      );
+      expect(mock.calls[0].args).not.toContain('-d');
+    });
+
+    it('calls spawn with docker start -ai and the container ID', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' });
+      await runtimeWithSpawn.run(
+        defaultRunOptions({ name: 'test-cred', stdinData: 'API_KEY=secret\n\n' }),
+      );
+      expect(spawnCalls).toHaveLength(1);
+      expect(spawnCalls[0].args).toEqual(['start', '-ai', 'abc123']);
+    });
+
+    it('pipes stdinData to the spawn function', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' });
+      const creds = 'ANTHROPIC_API_KEY=sk-ant-test\nOTHER=value\n\n';
+      await runtimeWithSpawn.run(defaultRunOptions({ name: 'test-cred', stdinData: creds }));
+      expect(spawnCalls[0].stdinData).toBe(creds);
+    });
+
+    it('returns the container ID from docker create', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'def456\n', stderr: '' });
+      const handle = await runtimeWithSpawn.run(
+        defaultRunOptions({ name: 'test-cred', stdinData: 'KEY=val\n\n' }),
+      );
+      expect(handle.id).toBe('def456');
+      expect(handle.name).toBe('test-cred');
+      expect(handle.runtime).toBe('docker');
+    });
+
+    it('passes --read-only and --network none in create args', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'abc\n', stderr: '' });
+      await runtimeWithSpawn.run(
+        defaultRunOptions({
+          name: 'test',
+          readOnly: true,
+          networkDisabled: true,
+          stdinData: 'K=V\n\n',
+        }),
+      );
+      expect(mock.calls[0].args).toContain('--read-only');
+      const netIdx = mock.calls[0].args.indexOf('--network');
+      expect(netIdx).toBeGreaterThan(-1);
+      expect(mock.calls[0].args[netIdx + 1]).toBe('none');
+    });
+
+    it('passes volume mounts in create args', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'abc\n', stderr: '' });
+      await runtimeWithSpawn.run(
+        defaultRunOptions({
+          name: 'test',
+          stdinData: 'K=V\n\n',
+          volumes: [{ source: '/host/ws', target: '/workspace', readonly: false }],
+        }),
+      );
+      expect(mock.calls[0].args).toContain('/host/ws:/workspace');
+    });
+
+    it('uses standard docker run (no spawn) when stdinData is absent', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'abc123\n', stderr: '' });
+      await runtimeWithSpawn.run(defaultRunOptions({ name: 'test-no-stdin' }));
+      expect(mock.calls[0].args[0]).toBe('run');
+      expect(mock.calls[0].args[1]).toBe('-d');
+      expect(spawnCalls).toHaveLength(0);
+    });
+
+    it('uses the configured dockerPath for spawn', async () => {
+      const customRuntime = new DockerRuntime({
+        exec: mock.exec,
+        spawn: spawnFn,
+        dockerPath: '/custom/docker',
+      });
+      mock.handler.mockResolvedValueOnce({ stdout: 'abc\n', stderr: '' });
+      await customRuntime.run(defaultRunOptions({ name: 'test', stdinData: 'K=V\n\n' }));
+      expect(spawnCalls[0].file).toBe('/custom/docker');
     });
   });
 });

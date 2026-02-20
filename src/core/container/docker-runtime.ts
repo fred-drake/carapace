@@ -12,7 +12,7 @@
  * - Socket mounts are regular bind mounts (`-v host:container`).
  */
 
-import { execFile as execFileCb } from 'node:child_process';
+import { execFile as execFileCb, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import type {
   ContainerRuntime,
@@ -32,6 +32,15 @@ export type ExecFn = (
   args: readonly string[],
 ) => Promise<{ stdout: string; stderr: string }>;
 
+/**
+ * Spawn function type for running a process with stdin data piped.
+ *
+ * Used by `docker start -ai` to pipe credentials to the container's stdin.
+ * The spawn function should write stdinData to the child process's stdin
+ * and detach without waiting for the process to exit.
+ */
+export type SpawnFn = (file: string, args: readonly string[], stdinData: string) => void;
+
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
@@ -41,6 +50,8 @@ export interface DockerRuntimeOptions {
   exec?: ExecFn;
   /** Path to the docker binary. Defaults to `'docker'`. */
   dockerPath?: string;
+  /** Injectable spawn function for stdin piping. Defaults to child_process.spawn. */
+  spawn?: SpawnFn;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,10 +107,12 @@ export class DockerRuntime implements ContainerRuntime {
 
   private readonly exec: ExecFn;
   private readonly dockerPath: string;
+  private readonly spawnFn: SpawnFn;
 
   constructor(options?: DockerRuntimeOptions) {
     this.exec = options?.exec ?? defaultExec;
     this.dockerPath = options?.dockerPath ?? 'docker';
+    this.spawnFn = options?.spawn ?? defaultSpawn;
   }
 
   // -----------------------------------------------------------------------
@@ -147,6 +160,19 @@ export class DockerRuntime implements ContainerRuntime {
 
   async run(options: ContainerRunOptions): Promise<ContainerHandle> {
     const name = options.name ?? `carapace-${Date.now()}`;
+
+    if (options.stdinData !== undefined) {
+      // Two-step create + start for stdin piping (credential injection)
+      const createArgs = this.buildCreateArgs(options, name);
+      const { stdout } = await this.docker(...createArgs);
+      const id = stdout.trim();
+
+      // Start container with stdin attached; pipe credentials
+      this.spawnFn(this.dockerPath, ['start', '-ai', id], options.stdinData);
+
+      return { id, name, runtime: this.name };
+    }
+
     const args = this.buildRunArgs(options, name);
     const { stdout } = await this.docker(...args);
     const id = stdout.trim();
@@ -198,6 +224,51 @@ export class DockerRuntime implements ContainerRuntime {
   // -----------------------------------------------------------------------
   // Internals
   // -----------------------------------------------------------------------
+
+  /**
+   * Build `docker create -i` args for stdin piping mode.
+   * Same flags as buildRunArgs but uses `create -i` instead of `run -d`.
+   */
+  private buildCreateArgs(options: ContainerRunOptions, name: string): string[] {
+    const args: string[] = ['create', '-i', '--name', name];
+
+    if (options.readOnly) {
+      args.push('--read-only');
+    }
+
+    if (options.network) {
+      args.push('--network', options.network);
+    } else if (options.networkDisabled) {
+      args.push('--network', 'none');
+    }
+
+    for (const vol of options.volumes) {
+      const suffix = vol.readonly ? ':ro' : '';
+      args.push('-v', `${vol.source}:${vol.target}${suffix}`);
+    }
+
+    for (const sock of options.socketMounts) {
+      args.push('-v', `${sock.hostPath}:${sock.containerPath}`);
+    }
+
+    for (const [key, value] of Object.entries(options.env)) {
+      args.push('-e', `${key}=${value}`);
+    }
+
+    if (options.user) {
+      args.push('--user', options.user);
+    }
+
+    if (options.entrypoint && options.entrypoint.length > 0) {
+      args.push('--entrypoint', options.entrypoint[0]);
+      args.push(options.image);
+      args.push(...options.entrypoint.slice(1));
+    } else {
+      args.push(options.image);
+    }
+
+    return args;
+  }
 
   private buildRunArgs(options: ContainerRunOptions, name: string): string[] {
     const args: string[] = ['run', '-d', '--name', name];
@@ -259,4 +330,18 @@ const defaultExec: ExecFn = async (file, args) => {
     stdout: typeof result.stdout === 'string' ? result.stdout : result.stdout.toString(),
     stderr: typeof result.stderr === 'string' ? result.stderr : result.stderr.toString(),
   };
+};
+
+/**
+ * Default spawn function — uses child_process.spawn to run a process
+ * with stdin data piped, then detaches without waiting for exit.
+ */
+const defaultSpawn: SpawnFn = (file, args, stdinData) => {
+  const child = spawn(file, [...args], {
+    stdio: ['pipe', 'ignore', 'ignore'],
+    detached: true,
+  });
+  child.stdin!.write(stdinData);
+  child.stdin!.end();
+  child.unref();
 };
