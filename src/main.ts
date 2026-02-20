@@ -33,7 +33,9 @@ import { parseArgs, runCommand } from './cli.js';
 import type { CliDeps } from './cli.js';
 import { resolveHome, ensureDirectoryStructure } from './types/config.js';
 import { loadConfig } from './core/config-loader.js';
-import { MockContainerRuntime } from './core/container/mock-runtime.js';
+import { DockerRuntime } from './core/container/docker-runtime.js';
+import { PodmanRuntime } from './core/container/podman-runtime.js';
+import { AppleContainerRuntime } from './core/container/apple-container-runtime.js';
 import { Server } from './core/server.js';
 import type { ServerConfig, ServerDeps } from './core/server.js';
 import { ZmqSocketFactory } from './core/zmq-socket-factory.js';
@@ -213,7 +215,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
     home,
     nodeVersion: process.version,
     platform: process.platform,
-    runtimes: [new MockContainerRuntime('docker')],
+    runtimes: [new DockerRuntime(), new PodmanRuntime(), new AppleContainerRuntime()],
     readPidFile: () => readPidFile(home),
     writePidFile: (pid: number) => writePidFile(home, pid),
     removePidFile: () => removePidFile(home),
