@@ -102,7 +102,7 @@ export class AppleContainerRuntime implements ContainerRuntime {
 
   async isAvailable(): Promise<boolean> {
     try {
-      await this.container('info');
+      await this.container('list');
       return true;
     } catch {
       return false;
