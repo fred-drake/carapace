@@ -16,6 +16,7 @@
 
 import { join } from 'node:path';
 import type { VerificationResult } from './security/artifact-verification.js';
+import type { ImageIdentity } from './core/image-identity.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -101,6 +102,10 @@ export interface UpdateCommandDeps {
   readConfigFile: () => string;
   /** Write new contents to config.toml. */
   writeConfigFile: (content: string) => void;
+  /** Build the container image. Returns image identity on success. */
+  buildImage?: (contextDir: string) => Promise<ImageIdentity>;
+  /** Path to the project root (build context for image building). */
+  projectRoot?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -401,6 +406,18 @@ export async function runUpdate(deps: UpdateCommandDeps, flags?: UpdateFlags): P
           `Warning: Could not pin image digest: ${err instanceof Error ? err.message : String(err)}`,
         );
         // Non-fatal — continue with update
+      }
+    }
+
+    // 7.5. Rebuild container image (if builder is configured)
+    if (deps.buildImage && deps.projectRoot) {
+      deps.stdout('Building container image...');
+      try {
+        const identity = await deps.buildImage(deps.projectRoot);
+        deps.stdout(`  Image built: ${identity.tag} (Claude Code ${identity.claudeVersion})`);
+      } catch (err) {
+        deps.stderr(`Image build failed: ${err instanceof Error ? err.message : String(err)}`);
+        return 1;
       }
     }
 
