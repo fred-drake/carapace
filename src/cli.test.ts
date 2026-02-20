@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { parseArgs, runCommand, doctor, start, stop, status, uninstall, auth } from './cli.js';
 import { MockContainerRuntime } from './core/container/mock-runtime.js';
 import type { CliDeps } from './cli.js';
@@ -528,5 +528,139 @@ describe('auth', () => {
     const deps = createTestDeps();
     const code = await auth(deps, 'bogus');
     expect(code).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// start — image staleness check
+// ---------------------------------------------------------------------------
+
+describe('start image staleness check', () => {
+  afterEach(() => {
+    delete process.env.SKIP_IMAGE_BUILD;
+  });
+
+  it('auto-rebuilds when image is stale', async () => {
+    const buildImage = vi.fn().mockResolvedValue({
+      tag: 'carapace:2.1.49-abc1234',
+      gitSha: 'abc1234',
+      claudeVersion: '2.1.49',
+      carapaceVersion: '0.0.1',
+      buildDate: '2026-02-20T00:00:00Z',
+    });
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn().mockResolvedValue('def5678'),
+      inspectImageLabels: vi.fn().mockResolvedValue({
+        'org.opencontainers.image.revision': 'abc1234',
+      }),
+      buildImage,
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+    });
+    await start(deps);
+    expect(buildImage).toHaveBeenCalledWith('/project');
+    expect(deps.stdout).toHaveBeenCalledWith('Image stale, rebuilding...');
+  });
+
+  it('skips rebuild when image is current', async () => {
+    const buildImage = vi.fn();
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn().mockResolvedValue('abc1234'),
+      inspectImageLabels: vi.fn().mockResolvedValue({
+        'org.opencontainers.image.revision': 'abc1234',
+      }),
+      buildImage,
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+    });
+    await start(deps);
+    expect(buildImage).not.toHaveBeenCalled();
+  });
+
+  it('builds when image is missing', async () => {
+    const buildImage = vi.fn().mockResolvedValue({
+      tag: 'carapace:latest-abc1234',
+      gitSha: 'abc1234',
+      claudeVersion: 'latest',
+      carapaceVersion: '0.0.1',
+      buildDate: '2026-02-20T00:00:00Z',
+    });
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn().mockResolvedValue('abc1234'),
+      inspectImageLabels: vi.fn().mockRejectedValue(new Error('not found')),
+      buildImage,
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+    });
+    await start(deps);
+    expect(buildImage).toHaveBeenCalledWith('/project');
+    expect(deps.stdout).toHaveBeenCalledWith('Container image not found, building...');
+  });
+
+  it('skips check with SKIP_IMAGE_BUILD=1', async () => {
+    process.env.SKIP_IMAGE_BUILD = '1';
+    const buildImage = vi.fn();
+    const runtime = new MockContainerRuntime('docker');
+    vi.spyOn(runtime, 'imageExists').mockResolvedValue(true);
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn().mockResolvedValue('abc1234'),
+      inspectImageLabels: vi.fn().mockResolvedValue({
+        'org.opencontainers.image.revision': 'old1234',
+      }),
+      buildImage,
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+      runtimes: [runtime],
+    });
+    await start(deps);
+    expect(buildImage).not.toHaveBeenCalled();
+    expect(deps.stdout).toHaveBeenCalledWith('Skipping image build check (SKIP_IMAGE_BUILD=1)');
+  });
+
+  it('fails with SKIP_IMAGE_BUILD when no image exists', async () => {
+    process.env.SKIP_IMAGE_BUILD = '1';
+    const runtime = new MockContainerRuntime('docker');
+    vi.spyOn(runtime, 'imageExists').mockResolvedValue(false);
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn(),
+      inspectImageLabels: vi.fn(),
+      buildImage: vi.fn(),
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+      runtimes: [runtime],
+    });
+    const code = await start(deps);
+    expect(code).toBe(1);
+    expect(deps.stderr).toHaveBeenCalledWith(
+      'No container image found. Run `carapace update` or unset SKIP_IMAGE_BUILD.',
+    );
+  });
+
+  it('returns 1 when image build fails', async () => {
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn().mockResolvedValue('abc1234'),
+      inspectImageLabels: vi.fn().mockRejectedValue(new Error('not found')),
+      buildImage: vi.fn().mockRejectedValue(new Error('build exploded')),
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+    });
+    const code = await start(deps);
+    expect(code).toBe(1);
+    expect(deps.stderr).toHaveBeenCalledWith('Image build failed: build exploded');
+  });
+
+  it('warns and continues when git SHA resolution fails', async () => {
+    const deps = createTestDeps({
+      resolveGitSha: vi.fn().mockRejectedValue(new Error('git not found')),
+      inspectImageLabels: vi.fn(),
+      buildImage: vi.fn(),
+      projectRoot: '/project',
+      imageName: 'carapace:latest',
+    });
+    const code = await start(deps);
+    expect(code).toBe(0);
+    expect(deps.stderr).toHaveBeenCalledWith(
+      'Warning: Could not check image staleness: git not found',
+    );
   });
 });
