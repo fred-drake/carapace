@@ -19,6 +19,7 @@
  * @see docs/ARCHITECTURE.md § "ZeroMQ Messaging Architecture"
  */
 
+import { existsSync, unlinkSync, readdirSync, mkdirSync, chmodSync } from 'node:fs';
 import type { SocketMount } from './container/runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -100,17 +101,13 @@ export interface SocketProvisionResult {
 // ---------------------------------------------------------------------------
 
 function createDefaultFs(): SocketFs {
-  // Lazy import to avoid pulling in fs at module evaluation time
-  // in environments where it may not be available.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const fs = require('node:fs') as typeof import('node:fs');
   return {
-    existsSync: (path: string) => fs.existsSync(path),
-    unlinkSync: (path: string) => fs.unlinkSync(path),
-    readdirSync: (dir: string) => fs.readdirSync(dir) as string[],
+    existsSync: (path: string) => existsSync(path),
+    unlinkSync: (path: string) => unlinkSync(path),
+    readdirSync: (dir: string) => readdirSync(dir) as string[],
     mkdirSync: (path: string, options?: { recursive?: boolean; mode?: number }) =>
-      fs.mkdirSync(path, options),
-    chmodSync: (path: string, mode: number) => fs.chmodSync(path, mode),
+      mkdirSync(path, options),
+    chmodSync: (path: string, mode: number) => chmodSync(path, mode),
   };
 }
 
