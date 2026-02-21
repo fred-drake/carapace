@@ -114,6 +114,10 @@ export const MANIFEST_JSON_SCHEMA = {
       type: 'array',
       items: { type: 'string' },
     },
+    session: {
+      type: 'string',
+      enum: ['fresh', 'resume', 'explicit'],
+    },
     config_schema: { $ref: '#/$defs/configSchema' },
   },
 } as const;

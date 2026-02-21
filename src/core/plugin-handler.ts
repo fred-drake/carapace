@@ -120,6 +120,48 @@ export interface PluginContext {
 }
 
 // ---------------------------------------------------------------------------
+// SessionRecord
+// ---------------------------------------------------------------------------
+
+/**
+ * A Claude Code session record as seen by plugin handlers through
+ * the SessionLookup interface. Read-only, scoped to the current group.
+ */
+export interface SessionRecord {
+  sessionId: string;
+  group: string;
+  startedAt: string;
+  endedAt: string | null;
+  resumable: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// SessionLookup
+// ---------------------------------------------------------------------------
+
+/**
+ * Read-only interface for querying Claude Code sessions within a group.
+ * Provided to plugins that declare `session: "explicit"` when the core
+ * calls their `resolveSession()` method.
+ *
+ * All queries are automatically scoped to the current group by the core.
+ */
+export interface SessionLookup {
+  /** Return the most recently used, non-expired session ID, or null. */
+  latest(): Promise<string | null>;
+  /** Find sessions matching the given criteria. */
+  find(criteria: SessionFindCriteria): Promise<SessionRecord[]>;
+}
+
+/** Criteria for filtering sessions via `SessionLookup.find()`. */
+export interface SessionFindCriteria {
+  /** Include only resumable sessions. */
+  resumable?: boolean;
+  /** Maximum number of results. */
+  limit?: number;
+}
+
+// ---------------------------------------------------------------------------
 // ToolInvocationResult
 // ---------------------------------------------------------------------------
 
@@ -143,6 +185,7 @@ export type ToolInvocationResult =
  * - `initialize` is called once during plugin loading with core services.
  * - `handleToolInvocation` processes tool calls from the container.
  * - `handleEvent` (optional) reacts to PUB/SUB events.
+ * - `resolveSession` (optional) selects a session for `explicit` policy.
  * - `shutdown` is called during graceful teardown.
  */
 export interface PluginHandler {
@@ -153,6 +196,13 @@ export interface PluginHandler {
     context: PluginContext,
   ): Promise<ToolInvocationResult>;
   handleEvent?(envelope: EventEnvelope): Promise<void>;
+  /**
+   * Optional session resolver for plugins with `session: "explicit"`.
+   * Called by the event dispatcher to determine which Claude Code session
+   * to resume (or null to start fresh). Only invoked when the manifest
+   * declares `session: "explicit"`.
+   */
+  resolveSession?(event: EventEnvelope, sessions: SessionLookup): Promise<string | null>;
   shutdown(): Promise<void>;
 }
 

@@ -264,6 +264,22 @@ export class PluginLoader {
       };
     }
 
+    // 4b. Validate session policy: explicit requires resolveSession()
+    if (manifest.session === 'explicit' && typeof handler.resolveSession !== 'function') {
+      this.logger.warn('plugin load failed', {
+        pluginName,
+        category: 'invalid_manifest',
+        reason: 'explicit session policy requires resolveSession()',
+      });
+      return {
+        ok: false,
+        pluginName,
+        error:
+          'Manifest declares session: "explicit" but handler does not implement resolveSession()',
+        category: 'invalid_manifest',
+      };
+    }
+
     // 5. Initialize with timeout (channel plugins get ChannelServices)
     try {
       await this.initializeWithTimeout(handler, pluginName, manifest);

@@ -13,6 +13,16 @@
 /** Tool risk levels that control host-side confirmation gates. */
 export type RiskLevel = 'low' | 'high';
 
+/**
+ * Session policy for a plugin. Controls how the event dispatcher
+ * selects a Claude Code session when triggering this plugin's group.
+ *
+ * - `"fresh"` (default): Always start a new session.
+ * - `"resume"`: Resume the most recent non-expired session, or start fresh.
+ * - `"explicit"`: Plugin must provide a `resolveSession()` handler.
+ */
+export type SessionPolicy = 'fresh' | 'resume' | 'explicit';
+
 // ---------------------------------------------------------------------------
 // Author
 // ---------------------------------------------------------------------------
@@ -78,6 +88,15 @@ export interface PluginManifest {
    * is unrestricted (available to all groups).
    */
   allowed_groups?: string[];
+  /**
+   * Session policy controlling how the event dispatcher selects a
+   * Claude Code session for this plugin's group.
+   *
+   * - `"fresh"` (default): Always start a new session.
+   * - `"resume"`: Resume the most recent non-expired session, or fresh.
+   * - `"explicit"`: Plugin provides a `resolveSession()` handler.
+   */
+  session?: SessionPolicy;
   config_schema?: {
     type: string;
     required?: string[];

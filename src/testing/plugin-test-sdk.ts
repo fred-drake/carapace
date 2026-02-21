@@ -13,6 +13,8 @@ import type {
   PluginHandler,
   CoreServices,
   ToolInvocationResult,
+  SessionRecord,
+  SessionLookup,
 } from '../core/plugin-handler.js';
 import type { ErrorCodeValue, ErrorPayload } from '../types/errors.js';
 
@@ -212,3 +214,35 @@ function collectStrings(value: unknown): string[] {
   }
   return [];
 }
+
+// ---------------------------------------------------------------------------
+// createTestSessionLookup()
+// ---------------------------------------------------------------------------
+
+// Re-export types so test authors can import from the SDK
+export type { SessionRecord, SessionLookup } from '../core/plugin-handler.js';
+
+/**
+ * Create a mock `SessionLookup` for testing `resolveSession()` handlers.
+ *
+ * Provides an in-memory implementation backed by the given session list.
+ * All queries are synchronous under the hood but wrapped in Promises
+ * to satisfy the `SessionLookup` interface.
+ */
+export function createTestSessionLookup(sessions?: SessionRecord[]): SessionLookup {
+  const data = sessions ?? [];
+  return {
+    latest: async () => {
+      const resumable = data.find((s) => s.resumable);
+      return resumable?.sessionId ?? null;
+    },
+    find: async (criteria) => {
+      let results = [...data];
+      if (criteria.resumable !== undefined) {
+        results = results.filter((s) => s.resumable === criteria.resumable);
+      }
+      return results.slice(0, criteria.limit ?? 10);
+    },
+  };
+}
+
