@@ -18,6 +18,8 @@ import type {
 } from './runtime.js';
 import type { SessionManager, Session } from '../session-manager.js';
 import { createLogger, type Logger } from '../logger.js';
+import type { EventEnvelope } from '../../types/protocol.js';
+import { ContainerOutputReader } from '../container-output-reader.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,6 +37,10 @@ export interface LifecycleManagerOptions {
   networkName?: string;
   /** Optional logger for structured logging. */
   logger?: Logger;
+  /** Optional event bus for publishing container output events. Required for ContainerOutputReader. */
+  eventBus?: { publish(envelope: EventEnvelope): Promise<void> };
+  /** Optional Claude session store for persisting --resume session IDs. Required for ContainerOutputReader. */
+  claudeSessionStore?: { save(group: string, claudeSessionId: string): void };
 }
 
 /** High-level request to spawn an agent container. */
@@ -57,6 +63,14 @@ export interface SpawnRequest {
    * `docker start -ai` so credentials never appear in `docker inspect`.
    */
   stdinData?: string;
+  /**
+   * Host-side path for per-group Claude Code state directory.
+   *
+   * Mounted as `/.claude` inside the container. Each group gets its own
+   * isolated directory (e.g. `$CARAPACE_HOME/data/claude-state/{group}/`)
+   * to prevent cross-group session data leakage (security P0).
+   */
+  claudeStatePath?: string;
 }
 
 /** A container managed by the lifecycle manager. */
@@ -84,6 +98,8 @@ export class ContainerLifecycleManager {
   private readonly shutdownTimeoutMs: number;
   private readonly networkName?: string;
   private readonly logger: Logger;
+  private readonly eventBus?: { publish(envelope: EventEnvelope): Promise<void> };
+  private readonly claudeSessionStore?: { save(group: string, claudeSessionId: string): void };
 
   /** Tracked containers indexed by session ID. */
   private readonly containers = new Map<string, ManagedContainer>();
@@ -94,6 +110,8 @@ export class ContainerLifecycleManager {
     this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
     this.networkName = options.networkName;
     this.logger = options.logger ?? createLogger('lifecycle');
+    this.eventBus = options.eventBus;
+    this.claudeSessionStore = options.claudeSessionStore;
   }
 
   /**
@@ -140,6 +158,24 @@ export class ContainerLifecycleManager {
 
     const managed: ManagedContainer = { handle, session };
     this.containers.set(session.sessionId, managed);
+
+    // Start ContainerOutputReader if deps and stdout are available (fire-and-forget)
+    if (handle.stdout && this.eventBus && this.claudeSessionStore) {
+      const reader = new ContainerOutputReader({
+        eventBus: this.eventBus,
+        claudeSessionStore: this.claudeSessionStore,
+      });
+      reader.start(handle.stdout, {
+        sessionId: session.sessionId,
+        group: request.group,
+        containerId: handle.id,
+      });
+      this.logger.info('container output reader started', {
+        session: session.sessionId,
+        group: request.group,
+        containerId: handle.id,
+      });
+    }
 
     this.logger.info('container spawned', {
       group: request.group,
@@ -281,6 +317,14 @@ export class ContainerLifecycleManager {
       volumes.push({
         source: request.workspacePath,
         target: '/workspace',
+        readonly: false,
+      });
+    }
+
+    if (request.claudeStatePath) {
+      volumes.push({
+        source: request.claudeStatePath,
+        target: '/.claude',
         readonly: false,
       });
     }

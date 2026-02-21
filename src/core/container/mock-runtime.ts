@@ -49,6 +49,7 @@ export class MockContainerRuntime implements ContainerRuntime {
   private availableError: Error | null = null;
   private nextRunFailure: string | null = null;
   private nextStopTimeout = false;
+  private nextStdout: NodeJS.ReadableStream | null = null;
 
   constructor(name: RuntimeName = 'docker') {
     this.name = name;
@@ -107,10 +108,14 @@ export class MockContainerRuntime implements ContainerRuntime {
 
     this.idCounter += 1;
 
+    const stdout = this.nextStdout ?? undefined;
+    this.nextStdout = null;
+
     const handle: ContainerHandle = {
       id: `mock-${this.idCounter}`,
       name: options.name ?? `mock-container-${this.idCounter}`,
       runtime: this.name,
+      stdout,
     };
 
     const state: ContainerState = {
@@ -193,6 +198,14 @@ export class MockContainerRuntime implements ContainerRuntime {
   }
 
   /**
+   * Set a stdout stream to be returned by the next `run()` call.
+   * Used for testing ContainerOutputReader integration.
+   */
+  setNextStdout(stream: NodeJS.ReadableStream): void {
+    this.nextStdout = stream;
+  }
+
+  /**
    * Simulate an unexpected container crash. Marks the container as `'dead'`
    * with exit code 137 (SIGKILL).
    */
@@ -225,5 +238,6 @@ export class MockContainerRuntime implements ContainerRuntime {
     this.availableError = null;
     this.nextRunFailure = null;
     this.nextStopTimeout = false;
+    this.nextStdout = null;
   }
 }
