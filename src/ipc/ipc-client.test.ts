@@ -19,6 +19,8 @@ import {
   type FakeDealerSocket,
 } from '../testing/fake-sockets.js';
 import { createResponseEnvelope } from '../testing/factories.js';
+import type { IpcLogEntry } from './ipc-logger.js';
+import { createIpcLogger } from './ipc-logger.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -287,6 +289,112 @@ describe('IpcClient', () => {
       await client.close();
 
       await expect(client.invoke('tool.invoke.test_tool', {})).rejects.toThrow(/closed/i);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Logging
+  // -------------------------------------------------------------------------
+
+  describe('logging', () => {
+    let logEntries: IpcLogEntry[];
+
+    function createLoggedClient(dealerSocket: FakeDealerSocket): IpcClient {
+      logEntries = [];
+      const testLogger = createIpcLogger('ipc-client', {
+        debugEnabled: true,
+        sink: (entry) => logEntries.push(entry),
+      });
+      return new IpcClient(dealerSocket, { timeoutMs: 5000, logger: testLogger });
+    }
+
+    it('logs invocation with topic and argument keys (not values)', async () => {
+      const pair = await wireFakeRouterDealer();
+      const loggedClient = createLoggedClient(pair.dealer);
+
+      autoRespond(pair.router, (corr) => createResponseEnvelope({ correlation: corr }));
+      await loggedClient.invoke('tool.invoke.test', { secret: 'password123', name: 'fred' });
+
+      const invokeLog = logEntries.find((e) => e.msg === 'invoking');
+      expect(invokeLog).toBeDefined();
+      expect(invokeLog!.topic).toBe('tool.invoke.test');
+      expect(invokeLog!.arg_keys).toEqual(['secret', 'name']);
+      // Verify no argument values are logged
+      const allJson = JSON.stringify(logEntries);
+      expect(allJson).not.toContain('password123');
+
+      await loggedClient.close();
+      await pair.router.close();
+    });
+
+    it('logs response received with duration', async () => {
+      const pair = await wireFakeRouterDealer();
+      const loggedClient = createLoggedClient(pair.dealer);
+
+      autoRespond(pair.router, (corr) => createResponseEnvelope({ correlation: corr }));
+      await loggedClient.invoke('tool.invoke.test', { input: 'test' });
+
+      const responseLog = logEntries.find((e) => e.msg === 'response received');
+      expect(responseLog).toBeDefined();
+      expect(responseLog!.duration_ms).toBeDefined();
+      expect(typeof responseLog!.duration_ms).toBe('number');
+
+      await loggedClient.close();
+      await pair.router.close();
+    });
+
+    it('logs wire message sent with byte length', async () => {
+      const pair = await wireFakeRouterDealer();
+      const loggedClient = createLoggedClient(pair.dealer);
+
+      autoRespond(pair.router, (corr) => createResponseEnvelope({ correlation: corr }));
+      await loggedClient.invoke('tool.invoke.test', {});
+
+      const sentLog = logEntries.find((e) => e.msg === 'wire message sent');
+      expect(sentLog).toBeDefined();
+      expect(sentLog!.byteLength).toBeDefined();
+      expect(typeof sentLog!.byteLength).toBe('number');
+
+      await loggedClient.close();
+      await pair.router.close();
+    });
+
+    it('logs client close with pending rejection count', async () => {
+      const pair = await wireFakeRouterDealer();
+      const loggedClient = createLoggedClient(pair.dealer);
+
+      await loggedClient.close();
+
+      const closeLog = logEntries.find((e) => e.msg === 'client closed');
+      expect(closeLog).toBeDefined();
+      expect(closeLog!.pending_rejected).toBe(0);
+
+      await pair.router.close();
+    });
+
+    it('logs timeout warning when request times out', async () => {
+      const pair = await wireFakeRouterDealer();
+      logEntries = [];
+      const testLogger = createIpcLogger('ipc-client', {
+        debugEnabled: true,
+        sink: (entry) => logEntries.push(entry),
+      });
+      const shortClient = new IpcClient(pair.dealer, { timeoutMs: 50, logger: testLogger });
+
+      // No auto-respond — will timeout
+      try {
+        await shortClient.invoke('tool.invoke.slow', {});
+      } catch {
+        // Expected timeout
+      }
+
+      const timeoutLog = logEntries.find((e) => e.msg === 'request timed out');
+      expect(timeoutLog).toBeDefined();
+      expect(timeoutLog!.level).toBe('warn');
+      expect(timeoutLog!.timeout_ms).toBe(50);
+
+      await shortClient.close();
+      await pair.router.close();
     });
   });
 });

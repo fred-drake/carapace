@@ -15,6 +15,7 @@
 import { randomUUID } from 'node:crypto';
 import type { DealerSocket, DealerMessageHandler } from '../types/socket.js';
 import type { WireMessage, ResponseEnvelope } from '../types/protocol.js';
+import { createIpcLogger, type IpcLogger } from './ipc-logger.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -26,6 +27,8 @@ export interface IpcClientOptions {
   timeoutMs?: number;
   /** Maximum payload size in bytes. Default 1MB. */
   maxPayloadBytes?: number;
+  /** Optional logger for testing; defaults to stderr IPC logger. */
+  logger?: IpcLogger;
 }
 
 const DEFAULT_TIMEOUT_MS = 35_000;
@@ -51,6 +54,7 @@ export class IpcClient {
   private readonly socket: DealerSocket;
   private readonly timeoutMs: number;
   private readonly maxPayloadBytes: number;
+  private readonly logger: IpcLogger;
   private closed = false;
 
   /** Pending invocations waiting for a correlated response. */
@@ -67,6 +71,7 @@ export class IpcClient {
     this.socket = socket;
     this.timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.maxPayloadBytes = options?.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
+    this.logger = options?.logger ?? createIpcLogger('ipc-client');
 
     // Listen for responses from the host.
     const handler: DealerMessageHandler = (payload: Buffer) => {
@@ -94,6 +99,12 @@ export class IpcClient {
 
     const correlation = randomUUID();
 
+    this.logger.debug('invoking', {
+      correlation,
+      topic,
+      arg_keys: Object.keys(args),
+    });
+
     const wireMessage: WireMessage = {
       topic,
       correlation,
@@ -105,6 +116,12 @@ export class IpcClient {
     // Check payload size before sending.
     const byteLength = Buffer.byteLength(serialized, 'utf-8');
     if (byteLength > this.maxPayloadBytes) {
+      this.logger.warn('payload size exceeded', {
+        correlation,
+        topic,
+        byteLength,
+        maxPayloadBytes: this.maxPayloadBytes,
+      });
       throw new Error(
         `Message exceeds payload size limit: ${byteLength} bytes > ${this.maxPayloadBytes} byte limit`,
       );
@@ -112,9 +129,15 @@ export class IpcClient {
 
     // Register the pending entry BEFORE sending so that synchronous
     // response delivery (e.g. from fake sockets in tests) can find it.
+    const startTime = Date.now();
     const responsePromise = new Promise<ResponseEnvelope>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(correlation);
+        this.logger.warn('request timed out', {
+          correlation,
+          topic,
+          timeout_ms: this.timeoutMs,
+        });
         reject(
           new Error(`IPC request timeout after ${this.timeoutMs}ms (correlation: ${correlation})`),
         );
@@ -127,16 +150,31 @@ export class IpcClient {
     // so close() doesn't reject an orphaned promise.
     try {
       await this.socket.send(Buffer.from(serialized));
+      this.logger.debug('wire message sent', { correlation, topic, byteLength });
     } catch (sendError) {
       const entry = this.pending.get(correlation);
       if (entry) {
         clearTimeout(entry.timer);
         this.pending.delete(correlation);
       }
+      this.logger.error('send failed', {
+        correlation,
+        topic,
+        error: sendError instanceof Error ? sendError.message : String(sendError),
+      });
       throw sendError;
     }
 
-    return responsePromise;
+    const response = await responsePromise;
+    const duration_ms = Date.now() - startTime;
+    this.logger.debug('response received', {
+      correlation,
+      topic,
+      duration_ms,
+      has_error: response.payload.error !== null,
+    });
+
+    return response;
   }
 
   /**
@@ -145,6 +183,7 @@ export class IpcClient {
    */
   async close(): Promise<void> {
     this.closed = true;
+    const pendingCount = this.pending.size;
 
     // Reject all pending invocations.
     for (const [correlation, entry] of this.pending) {
@@ -154,6 +193,7 @@ export class IpcClient {
     }
 
     await this.socket.close();
+    this.logger.debug('client closed', { pending_rejected: pendingCount });
   }
 
   // -------------------------------------------------------------------------
@@ -166,15 +206,25 @@ export class IpcClient {
     try {
       response = JSON.parse(payload.toString()) as ResponseEnvelope;
     } catch {
-      // Malformed JSON — drop it.
+      this.logger.warn('malformed response dropped', {
+        byteLength: payload.length,
+      });
       return;
     }
 
     const correlation = response.correlation;
-    if (!correlation) return;
+    if (!correlation) {
+      this.logger.warn('response missing correlation', {
+        topic: response.topic,
+      });
+      return;
+    }
 
     const entry = this.pending.get(correlation);
-    if (!entry) return;
+    if (!entry) {
+      this.logger.debug('unmatched response ignored', { correlation });
+      return;
+    }
 
     clearTimeout(entry.timer);
     this.pending.delete(correlation);
