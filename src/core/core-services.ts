@@ -11,11 +11,21 @@
  * - `getToolCatalog()` returns all registered tools (not group-scoped).
  */
 
+import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { CoreServices, AuditLogFilter, AuditLogEntry, SessionInfo } from './plugin-handler.js';
+import type {
+  CoreServices,
+  ChannelServices,
+  AuditLogFilter,
+  AuditLogEntry,
+  SessionInfo,
+} from './plugin-handler.js';
 import type { AuditLog, AuditEntry, AuditOutcome } from './audit-log.js';
 import type { ToolCatalog } from './tool-catalog.js';
 import type { ToolDeclaration } from '../types/manifest.js';
+import type { EventBus } from './event-bus.js';
+import { PROTOCOL_VERSION } from '../types/protocol.js';
+import type { EventEnvelope } from '../types/protocol.js';
 
 // ---------------------------------------------------------------------------
 // Request context
@@ -159,5 +169,38 @@ export class CoreServicesImpl implements CoreServices {
       throw new Error('CoreServices accessed outside of a request context');
     }
     return ctx;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ChannelServicesImpl
+// ---------------------------------------------------------------------------
+
+export class ChannelServicesImpl extends CoreServicesImpl implements ChannelServices {
+  private readonly eventBus: EventBus;
+
+  constructor(auditLog: AuditLog, toolCatalog: ToolCatalog, eventBus: EventBus) {
+    super(auditLog, toolCatalog);
+    this.eventBus = eventBus;
+  }
+
+  async publishEvent(partial: {
+    topic: string;
+    source: string;
+    group: string;
+    payload: Record<string, unknown>;
+  }): Promise<void> {
+    const envelope: EventEnvelope = {
+      id: randomUUID(),
+      version: PROTOCOL_VERSION,
+      type: 'event',
+      topic: partial.topic,
+      source: partial.source,
+      correlation: null,
+      timestamp: new Date().toISOString(),
+      group: partial.group,
+      payload: partial.payload,
+    };
+    await this.eventBus.publish(envelope);
   }
 }

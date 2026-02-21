@@ -69,6 +69,19 @@ vi.mock('/plugins/collision/handler.js', () => importMocks.get('/plugins/collisi
 vi.mock('/plugins/shutdown-hang/handler.js', () =>
   importMocks.get('/plugins/shutdown-hang/handler.js')!(),
 );
+vi.mock('/plugins/accessor-test/handler.js', () =>
+  importMocks.get('/plugins/accessor-test/handler.js')!(),
+);
+vi.mock('/plugins/accessor-all/handler.js', () =>
+  importMocks.get('/plugins/accessor-all/handler.js')!(),
+);
+// Channel services injection mocks
+vi.mock('/plugins/channel-plugin/handler.js', () =>
+  importMocks.get('/plugins/channel-plugin/handler.js')!(),
+);
+vi.mock('/plugins/tool-only-plugin/handler.js', () =>
+  importMocks.get('/plugins/tool-only-plugin/handler.js')!(),
+);
 // Built-in plugin handler mocks
 vi.mock('/builtin/alpha/handler.js', () => importMocks.get('/builtin/alpha/handler.js')!());
 vi.mock('/builtin/beta/handler.js', () => importMocks.get('/builtin/beta/handler.js')!());
@@ -826,6 +839,143 @@ describe('PluginLoader', () => {
         expect(results[0]!.source).toBe('user');
       }
       expect(catalog.has('alpha_user_tool')).toBe(true);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // ChannelServices injection for channel plugins
+  // -----------------------------------------------------------------------
+
+  describe('ChannelServices injection', () => {
+    it('passes ChannelServices to plugins that declare provides.channels', async () => {
+      const manifest = createManifest({
+        provides: {
+          channels: ['test-input'],
+          tools: [createToolDeclaration({ name: 'channel_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+      const mockEventBus = {
+        publish: vi.fn(async () => {}),
+      } as unknown as import('./event-bus.js').EventBus;
+
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      allowAccess(['/plugins/channel-plugin/manifest.json', '/plugins/channel-plugin/handler.js']);
+      importMocks.set('/plugins/channel-plugin/handler.js', () =>
+        Promise.resolve({ default: handler }),
+      );
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+        eventBus: mockEventBus,
+      });
+      const result = await loader.loadPlugin('/plugins/channel-plugin');
+
+      expect(result.ok).toBe(true);
+      expect(handler.initialize).toHaveBeenCalledTimes(1);
+      const services = (handler.initialize as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(typeof services.publishEvent).toBe('function');
+    });
+
+    it('passes CoreServices (without publishEvent) to tool-only plugins', async () => {
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'tool_only' })],
+        },
+      });
+      const handler = createMockHandler();
+      const mockEventBus = {
+        publish: vi.fn(async () => {}),
+      } as unknown as import('./event-bus.js').EventBus;
+
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      allowAccess([
+        '/plugins/tool-only-plugin/manifest.json',
+        '/plugins/tool-only-plugin/handler.js',
+      ]);
+      importMocks.set('/plugins/tool-only-plugin/handler.js', () =>
+        Promise.resolve({ default: handler }),
+      );
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+        eventBus: mockEventBus,
+      });
+      await loader.loadPlugin('/plugins/tool-only-plugin');
+
+      expect(handler.initialize).toHaveBeenCalledTimes(1);
+      const services = (handler.initialize as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(services.publishEvent).toBeUndefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // getHandler accessor
+  // -----------------------------------------------------------------------
+
+  describe('getHandler', () => {
+    it('returns the handler instance after loadPlugin()', async () => {
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'accessor_test_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      allowAccess(['/plugins/accessor-test/manifest.json', '/plugins/accessor-test/handler.js']);
+      importMocks.set('/plugins/accessor-test/handler.js', () =>
+        Promise.resolve({ default: handler }),
+      );
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      await loader.loadPlugin('/plugins/accessor-test');
+
+      expect(loader.getHandler('accessor-test')).toBe(handler);
+    });
+
+    it('returns undefined for unknown plugin name', () => {
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+
+      expect(loader.getHandler('unknown')).toBeUndefined();
+    });
+
+    it('returns correct handler after loadAll()', async () => {
+      mockReaddir.mockResolvedValue(['accessor-all'] as unknown as Awaited<
+        ReturnType<typeof readdir>
+      >);
+
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'accessor_all_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+
+      allowAccess(['/plugins/accessor-all/manifest.json', '/plugins/accessor-all/handler.js']);
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      importMocks.set('/plugins/accessor-all/handler.js', () =>
+        Promise.resolve({ default: handler }),
+      );
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      await loader.loadAll();
+
+      expect(loader.getHandler('accessor-all')).toBe(handler);
     });
   });
 });

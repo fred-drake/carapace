@@ -170,21 +170,41 @@ async function confirm(prompt: string): Promise<boolean> {
 // Server factory for start command
 // ---------------------------------------------------------------------------
 
-function createStartServer(home: string): {
+function createStartServer(
+  home: string,
+  containerRuntime?: ContainerRuntime,
+): {
   start: () => Promise<void>;
   stop: () => Promise<void>;
 } {
   const socketDir = join(home, 'run', 'sockets');
   const pluginsDir = join(home, 'plugins');
+  const promptsDir = join(home, 'run', 'prompts');
+  const credentialsDir = join(home, 'credentials');
 
   const config: ServerConfig = {
     socketDir,
     pluginsDir,
+    promptsDir,
+    credentialsDir,
+    containerImage: readCurrentImageTag(home),
   };
 
   const deps: ServerDeps = {
     socketFactory: new ZmqSocketFactory(),
     output: (msg: string) => process.stdout.write(`${msg}\n`),
+    containerRuntime,
+    promptFs: {
+      readdirSync: (dir: string) => readdirSync(dir) as string[],
+      readFileSync: (path: string) => readFileSync(path, 'utf-8'),
+      unlinkSync: (path: string) => unlinkSync(path),
+      existsSync: (path: string) => existsSync(path),
+      mkdirSync: (path: string, opts?: { recursive?: boolean }) => mkdirSync(path, opts),
+    },
+    credentialFs: {
+      existsSync: (path: string) => existsSync(path),
+      readFileSync: (path: string) => readFileSync(path, 'utf-8'),
+    },
   };
 
   const server = new Server(config, deps);
@@ -274,7 +294,7 @@ function detectProjectRoot(): string | undefined {
  * @returns Exit code (0 = success, non-zero = failure).
  */
 export async function main(argv: string[] = process.argv): Promise<number> {
-  const { command: parsedCommand, subcommand, flags } = parseArgs(argv);
+  const { command: parsedCommand, subcommand, flags, options, positionals } = parseArgs(argv);
   const home = resolveHome();
 
   // Translate flags to pseudo-commands for runCommand compatibility
@@ -287,9 +307,11 @@ export async function main(argv: string[] = process.argv): Promise<number> {
 
   const runtimes = [new AppleContainerRuntime(), new PodmanRuntime(), new DockerRuntime()];
 
-  // Wire image versioning deps if a Dockerfile and runtime are available
+  // Detect available container runtime (needed for both spawning and building)
+  const runtime = await findAvailableRuntime(runtimes);
+
+  // Detect project root for image building (only needed when Dockerfile exists)
   const projectRoot = detectProjectRoot();
-  const runtime = projectRoot ? await findAvailableRuntime(runtimes) : undefined;
 
   const deps: CliDeps = {
     stdout: (msg: string) => process.stdout.write(`${msg}\n`),
@@ -349,7 +371,8 @@ export async function main(argv: string[] = process.argv): Promise<number> {
         return null;
       }
     },
-    startServer: () => createStartServer(home),
+    startServer: () => createStartServer(home, runtime),
+    ensureDir: (path: string) => mkdirSync(path, { recursive: true }),
 
     // Image versioning — only wired when Dockerfile and runtime are available
     ...(runtime && projectRoot
@@ -386,7 +409,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
       : {}),
   };
 
-  return runCommand(command, deps, flags, subcommand);
+  return runCommand(command, deps, flags, subcommand, options, positionals);
 }
 
 // ---------------------------------------------------------------------------

@@ -24,9 +24,11 @@ import { ToolCatalog } from './tool-catalog.js';
 import type {
   PluginHandler,
   CoreServices,
+  ChannelServices,
   PluginLoadResult,
   PluginSource,
 } from './plugin-handler.js';
+import type { EventBus } from './event-bus.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -62,6 +64,7 @@ export class PluginLoader {
   private readonly userPluginsDir: string;
   private readonly builtinPluginsDir: string | undefined;
   private readonly initTimeoutMs: number;
+  private readonly eventBus: EventBus | undefined;
   private readonly loadedHandlers: Map<string, PluginHandler> = new Map();
 
   constructor(opts: {
@@ -69,11 +72,13 @@ export class PluginLoader {
     userPluginsDir: string;
     builtinPluginsDir?: string;
     initTimeoutMs?: number;
+    eventBus?: EventBus;
   }) {
     this.toolCatalog = opts.toolCatalog;
     this.userPluginsDir = opts.userPluginsDir;
     this.builtinPluginsDir = opts.builtinPluginsDir;
     this.initTimeoutMs = opts.initTimeoutMs ?? 10_000;
+    this.eventBus = opts.eventBus;
   }
 
   // -------------------------------------------------------------------------
@@ -132,6 +137,18 @@ export class PluginLoader {
     }
 
     return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // -------------------------------------------------------------------------
+  // Accessor
+  // -------------------------------------------------------------------------
+
+  /**
+   * Return the loaded handler for the given plugin directory name,
+   * or undefined if no plugin by that name has been loaded.
+   */
+  getHandler(pluginName: string): PluginHandler | undefined {
+    return this.loadedHandlers.get(pluginName);
   }
 
   // -------------------------------------------------------------------------
@@ -227,9 +244,9 @@ export class PluginLoader {
       };
     }
 
-    // 5. Initialize with timeout
+    // 5. Initialize with timeout (channel plugins get ChannelServices)
     try {
-      await this.initializeWithTimeout(handler, pluginName);
+      await this.initializeWithTimeout(handler, pluginName, manifest);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       const isTimeout = message.includes('timed out');
@@ -357,13 +374,55 @@ export class PluginLoader {
   /**
    * Call handler.initialize() with a timeout. Rejects with a descriptive
    * error if the timeout expires before initialization completes.
+   *
+   * Channel plugins (those with `provides.channels.length > 0`) receive
+   * {@link ChannelServices} with `publishEvent()`. Tool-only plugins
+   * receive plain {@link CoreServices}.
    */
-  private async initializeWithTimeout(handler: PluginHandler, pluginName: string): Promise<void> {
-    const services: CoreServices = {
+  private async initializeWithTimeout(
+    handler: PluginHandler,
+    pluginName: string,
+    manifest: PluginManifest,
+  ): Promise<void> {
+    const isChannelPlugin = manifest.provides.channels.length > 0;
+
+    const baseServices: CoreServices = {
       getAuditLog: async () => [],
       getToolCatalog: () => this.toolCatalog.list(),
       getSessionInfo: () => ({ group: '', sessionId: '', startedAt: '' }),
     };
+
+    let services: CoreServices | ChannelServices;
+    if (isChannelPlugin && this.eventBus) {
+      const eventBus = this.eventBus;
+      services = {
+        ...baseServices,
+        publishEvent: async (partial: {
+          topic: string;
+          source: string;
+          group: string;
+          payload: Record<string, unknown>;
+        }) => {
+          const { randomUUID } = await import('node:crypto');
+          const { PROTOCOL_VERSION } = await import('../types/protocol.js');
+          const envelope = {
+            id: randomUUID(),
+            version: PROTOCOL_VERSION,
+            type: 'event' as const,
+            topic: partial.topic,
+            source: partial.source,
+            correlation: null,
+            timestamp: new Date().toISOString(),
+            group: partial.group,
+            payload: partial.payload,
+          };
+          await eventBus.publish(envelope);
+        },
+      };
+    } else {
+      services = baseServices;
+    }
+
     await Promise.race([
       handler.initialize(services),
       new Promise<never>((_, reject) =>

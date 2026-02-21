@@ -187,16 +187,15 @@ describe('AppleContainerRuntime', () => {
   // -----------------------------------------------------------------------
 
   describe('run read-only handling', () => {
-    it('does NOT add --read-only because it is the default', async () => {
+    it('adds --read-only when readOnly is true', async () => {
       mock.handler.mockResolvedValueOnce({ stdout: 'abc\n', stderr: '' });
       await runtime.run(defaultRunOptions({ readOnly: true }));
-      expect(mock.calls[0].args).not.toContain('--read-only');
+      expect(mock.calls[0].args).toContain('--read-only');
     });
 
-    it('does NOT add --read-only even when readOnly is false (Apple controls mutability via mounts)', async () => {
+    it('does NOT add --read-only when readOnly is false', async () => {
       mock.handler.mockResolvedValueOnce({ stdout: 'abc\n', stderr: '' });
       await runtime.run(defaultRunOptions({ readOnly: false }));
-      // Apple Containers is read-only by default; writable mounts are explicit
       expect(mock.calls[0].args).not.toContain('--read-only');
     });
   });
@@ -256,11 +255,11 @@ describe('AppleContainerRuntime', () => {
   });
 
   // -----------------------------------------------------------------------
-  // run — socket mounts (vsock via --publish-socket)
+  // run — socket mounts (bind-mount via -v)
   // -----------------------------------------------------------------------
 
-  describe('run socket mounts (vsock)', () => {
-    it('uses --publish-socket for socket mounts', async () => {
+  describe('run socket mounts', () => {
+    it('uses -v bind mount for socket mounts', async () => {
       mock.handler.mockResolvedValueOnce({ stdout: 'abc\n', stderr: '' });
       await runtime.run(
         defaultRunOptions({
@@ -268,9 +267,9 @@ describe('AppleContainerRuntime', () => {
         }),
       );
       const args = mock.calls[0].args;
-      expect(args).toContain('--publish-socket');
-      const psIdx = args.indexOf('--publish-socket');
-      expect(args[psIdx + 1]).toBe('/run/carapace.sock:/run/agent.sock');
+      expect(args).toContain('-v');
+      const vIdx = args.lastIndexOf('-v');
+      expect(args[vIdx + 1]).toBe('/run/carapace.sock:/run/agent.sock');
     });
 
     it('mounts multiple sockets', async () => {
@@ -284,11 +283,12 @@ describe('AppleContainerRuntime', () => {
         }),
       );
       const args = mock.calls[0].args;
-      const psIndexes = args.reduce<number[]>((acc, arg, i) => {
-        if (arg === '--publish-socket') acc.push(i);
+      // Count -v flags that correspond to socket mounts
+      const vIndexes = args.reduce<number[]>((acc, arg, i) => {
+        if (arg === '-v' && args[i + 1]?.includes('.sock')) acc.push(i);
         return acc;
       }, []);
-      expect(psIndexes).toHaveLength(2);
+      expect(vIndexes).toHaveLength(2);
     });
   });
 

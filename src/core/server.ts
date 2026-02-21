@@ -12,17 +12,23 @@
  */
 
 import type { SocketFactory } from '../types/socket.js';
-import type { WireMessage } from '../types/protocol.js';
+import type { WireMessage, EventEnvelope } from '../types/protocol.js';
 import { SocketProvisioner } from './socket-provisioner.js';
 import type { SocketFs } from './socket-provisioner.js';
 import { RequestChannel } from './request-channel.js';
 import { EventBus } from './event-bus.js';
+import type { SubscriptionHandle } from './event-bus.js';
 import { ToolCatalog } from './tool-catalog.js';
 import { PluginLoader } from './plugin-loader.js';
+import type { PluginHandler } from './plugin-handler.js';
 import { SessionManager } from './session-manager.js';
 import { ResponseSanitizer } from './response-sanitizer.js';
 import { MessageRouter } from './router.js';
 import { ECHO_TOOL_DECLARATION, echoToolHandler } from './intrinsic-echo.js';
+import type { ContainerRuntime } from './container/runtime.js';
+import { ContainerLifecycleManager } from './container/lifecycle-manager.js';
+import { EventDispatcher } from './event-dispatcher.js';
+import { readCredentialStdin, type CredentialFs } from './credential-reader.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -36,6 +42,27 @@ export interface ServerConfig {
   pluginsDir: string;
   /** Built-in plugins directory (optional). */
   builtinPluginsDir?: string;
+  /** Container image reference for spawning agent containers. */
+  containerImage?: string;
+  /** Host-side workspace directory to mount into containers. */
+  workspacePath?: string;
+  /** Maximum concurrent sessions allowed per group (default: 3). */
+  maxSessionsPerGroup?: number;
+  /** Groups that accept message.inbound events. */
+  configuredGroups?: string[];
+  /** Directory to watch for CLI-submitted prompt files. */
+  promptsDir?: string;
+  /** Directory containing credential files (anthropic-api-key, claude-oauth-token). */
+  credentialsDir?: string;
+}
+
+/** Minimal filesystem interface for prompt file watching. */
+export interface PromptFs {
+  readdirSync(dir: string): string[];
+  readFileSync(path: string, encoding: 'utf-8'): string;
+  unlinkSync(path: string): void;
+  existsSync(path: string): boolean;
+  mkdirSync(path: string, options?: { recursive?: boolean }): void;
 }
 
 /** Injectable dependencies for the Server. */
@@ -46,6 +73,12 @@ export interface ServerDeps {
   fs?: SocketFs;
   /** Output callback for status messages (e.g. "Server ready"). */
   output?: (msg: string) => void;
+  /** Container runtime for spawning agent containers. When provided, enables event dispatch. */
+  containerRuntime?: ContainerRuntime;
+  /** Filesystem abstraction for prompt file watching. */
+  promptFs?: PromptFs;
+  /** Filesystem abstraction for credential reading. */
+  credentialFs?: CredentialFs;
 }
 
 // ---------------------------------------------------------------------------
@@ -59,6 +92,9 @@ export class Server {
   private readonly config: ServerConfig;
   private readonly socketFactory: SocketFactory;
   private readonly output: (msg: string) => void;
+  private readonly containerRuntime: ContainerRuntime | undefined;
+  private readonly promptFs: PromptFs | undefined;
+  private readonly credentialFs: CredentialFs | undefined;
 
   // Subsystems — created during start()
   private provisioner: SocketProvisioner | null = null;
@@ -66,6 +102,10 @@ export class Server {
   private eventBus: EventBus | null = null;
   private pluginLoader: PluginLoader | null = null;
   private router: MessageRouter | null = null;
+  private lifecycleManager: ContainerLifecycleManager | null = null;
+  private eventDispatcher: EventDispatcher | null = null;
+  private eventSubscription: SubscriptionHandle | null = null;
+  private promptPollTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
 
   // Exposed for orchestrator chain inspection (e.g. by downstream tasks)
@@ -77,12 +117,23 @@ export class Server {
     this.config = config;
     this.socketFactory = deps.socketFactory;
     this.output = deps.output ?? (() => {});
+    this.containerRuntime = deps.containerRuntime;
+    this.promptFs = deps.promptFs;
+    this.credentialFs = deps.credentialFs;
 
     // If a custom FS is provided, store it for provisioner creation
     this.provisionerFs = deps.fs;
   }
 
   private readonly provisionerFs: SocketFs | undefined;
+
+  /**
+   * Return the loaded plugin handler by directory name, or undefined
+   * if the plugin is not loaded (or the server has not started).
+   */
+  getPluginHandler(name: string): PluginHandler | undefined {
+    return this.pluginLoader?.getHandler(name);
+  }
 
   /**
    * Boot the server:
@@ -146,9 +197,75 @@ export class Server {
       void this.handleRequest(connectionIdentity, wire);
     });
 
+    // 7. Wire event dispatch pipeline (when container runtime is available)
+    if (this.containerRuntime) {
+      this.lifecycleManager = new ContainerLifecycleManager({
+        runtime: this.containerRuntime,
+        sessionManager: this.sessionManager,
+      });
+
+      const lifecycleManager = this.lifecycleManager;
+      const config = this.config;
+      const sessionManager = this.sessionManager;
+      const credFs = this.credentialFs;
+
+      this.eventDispatcher = new EventDispatcher({
+        getActiveSessionCount: (group) =>
+          sessionManager.getAll().filter((s) => s.group === group).length,
+        spawnAgent: async (group, env) => {
+          // Read credentials for injection via stdin
+          let stdinData: string | undefined;
+          if (config.credentialsDir && credFs) {
+            const creds = readCredentialStdin(config.credentialsDir, credFs);
+            if (creds) {
+              stdinData = creds;
+            }
+          }
+
+          const managed = await lifecycleManager.spawn({
+            group,
+            image: config.containerImage ?? 'carapace-agent:latest',
+            socketPath: provision.requestSocketPath,
+            workspacePath: config.workspacePath,
+            env,
+            stdinData,
+          });
+          return managed.session.sessionId;
+        },
+        maxSessionsPerGroup: config.maxSessionsPerGroup ?? 3,
+        configuredGroups: new Set(config.configuredGroups ?? []),
+      });
+
+      const dispatcher = this.eventDispatcher;
+
+      this.eventSubscription = await this.eventBus.subscribe(provision.eventAddress, [
+        'message.inbound',
+        'task.triggered',
+      ]);
+
+      this.eventSubscription.onMessage((envelope) => {
+        void dispatcher.dispatch(envelope as EventEnvelope).then((result) => {
+          if (result.action === 'error') {
+            this.output(`Event dispatch error (${result.group}): ${result.reason}`);
+          } else if (result.action === 'rejected') {
+            this.output(`Event rejected (${result.group}): ${result.reason}`);
+          } else if (result.action === 'dropped') {
+            this.output(`Event dropped (${result.topic}): ${result.reason}`);
+          } else if (result.action === 'spawned') {
+            this.output(`Agent spawned for group "${result.group}" (session ${result.sessionId})`);
+          }
+        });
+      });
+    }
+
+    // 8. Start prompt file polling (if promptsDir is configured and event dispatch is available)
+    if (this.config.promptsDir && this.eventDispatcher) {
+      this.startPromptPolling(this.config.promptsDir, this.eventDispatcher);
+    }
+
     this.started = true;
 
-    // 7. Report ready
+    // 9. Report ready
     this.output('Server ready');
   }
 
@@ -164,31 +281,50 @@ export class Server {
       return;
     }
 
-    // 1. Close request channel
+    // 0. Stop prompt polling
+    if (this.promptPollTimer) {
+      clearInterval(this.promptPollTimer);
+      this.promptPollTimer = null;
+    }
+
+    // 1. Unsubscribe from event bus (before closing sockets)
+    if (this.eventSubscription) {
+      await this.eventSubscription.unsubscribe();
+      this.eventSubscription = null;
+    }
+
+    // 2. Close request channel
     if (this.requestChannel) {
       await this.requestChannel.close();
       this.requestChannel = null;
     }
 
-    // 2. Close event bus
+    // 3. Close event bus
     if (this.eventBus) {
       await this.eventBus.close();
       this.eventBus = null;
     }
 
-    // 3. Shutdown plugins
+    // 4. Shutdown lifecycle manager (kills containers, cleans sessions)
+    if (this.lifecycleManager) {
+      await this.lifecycleManager.shutdownAll();
+      this.lifecycleManager = null;
+    }
+    this.eventDispatcher = null;
+
+    // 5. Shutdown plugins
     if (this.pluginLoader) {
       await this.pluginLoader.shutdownAll();
       this.pluginLoader = null;
     }
 
-    // 4. Release socket files
+    // 6. Release socket files
     if (this.provisioner) {
       this.provisioner.releaseAll();
       this.provisioner = null;
     }
 
-    // 5. Clear subsystem references
+    // 7. Clear subsystem references
     this.sessionManager?.cleanup();
     this.router = null;
     this.toolCatalog = null;
@@ -251,6 +387,80 @@ export class Server {
       await this.requestChannel.sendResponse(connectionIdentity, sanitizedResponse);
     } catch {
       // Connection may have been closed — log and continue
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Private: prompt file polling
+  // -------------------------------------------------------------------------
+
+  /** Polling interval for prompt file checking (500ms). */
+  private static readonly PROMPT_POLL_INTERVAL_MS = 500;
+
+  /**
+   * Start polling a directory for CLI-submitted prompt files.
+   *
+   * Files are JSON-serialized EventEnvelopes written by `carapace prompt`.
+   * Each file is read, dispatched, and deleted.
+   */
+  private startPromptPolling(promptsDir: string, dispatcher: EventDispatcher): void {
+    const fs = this.promptFs;
+    if (!fs) return;
+
+    // Ensure prompts directory exists
+    if (!fs.existsSync(promptsDir)) {
+      fs.mkdirSync(promptsDir, { recursive: true });
+    }
+
+    this.promptPollTimer = setInterval(() => {
+      this.processPromptFiles(promptsDir, dispatcher, fs);
+    }, Server.PROMPT_POLL_INTERVAL_MS);
+
+    // Don't let the timer keep the process alive
+    if (this.promptPollTimer.unref) {
+      this.promptPollTimer.unref();
+    }
+  }
+
+  /**
+   * Check the prompts directory for new files and dispatch them.
+   */
+  private processPromptFiles(promptsDir: string, dispatcher: EventDispatcher, fs: PromptFs): void {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(promptsDir);
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) continue;
+
+      const filePath = `${promptsDir}/${entry}`;
+      try {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const envelope = JSON.parse(content) as EventEnvelope;
+        this.output(`Processing prompt file: ${entry}`);
+        void dispatcher.dispatch(envelope).then((result) => {
+          if (result.action === 'error') {
+            this.output(`Prompt dispatch error (${result.group}): ${result.reason}`);
+          } else if (result.action === 'rejected') {
+            this.output(`Prompt rejected (${result.group}): ${result.reason}`);
+          } else if (result.action === 'spawned') {
+            this.output(
+              `Agent spawned for prompt (group "${result.group}", session ${result.sessionId})`,
+            );
+          }
+        });
+        fs.unlinkSync(filePath);
+      } catch {
+        // Malformed file or read error — remove and continue
+        try {
+          fs.unlinkSync(filePath);
+        } catch {
+          // Already gone
+        }
+      }
     }
   }
 }

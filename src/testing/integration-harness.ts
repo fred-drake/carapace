@@ -18,7 +18,13 @@
  */
 
 import type { ToolDeclaration } from '../types/manifest.js';
-import type { WireMessage, ResponseEnvelope, EventEnvelope, Envelope } from '../types/protocol.js';
+import type {
+  WireMessage,
+  ResponseEnvelope,
+  RequestEnvelope,
+  EventEnvelope,
+  Envelope,
+} from '../types/protocol.js';
 import { PROTOCOL_VERSION } from '../types/protocol.js';
 import { ErrorCode, ERROR_RETRIABLE_DEFAULTS } from '../types/errors.js';
 import type { ErrorPayload } from '../types/errors.js';
@@ -55,6 +61,7 @@ import type {
   RouterSocket,
   DealerSocket,
 } from '../types/socket.js';
+import { TestInputHandler } from '../plugins/test-input/handler.js';
 
 // ---------------------------------------------------------------------------
 // Auto-wiring socket factory
@@ -65,7 +72,7 @@ import type {
  * connects to an address where a PUB is bound, it's automatically wired.
  * Same for DEALER → ROUTER.
  */
-class AutoWiringSocketFactory implements SocketFactory {
+export class AutoWiringSocketFactory implements SocketFactory {
   private readonly publishers: FakePubSocket[] = [];
   private readonly subscribers: FakeSubSocket[] = [];
   private readonly routers: FakeRouterSocket[] = [];
@@ -297,6 +304,7 @@ export class IntegrationHarness {
   private readonly eventBus: EventBus;
   private closed = false;
   private _overrideRateConfig: RateLimiterConfig | null = null;
+  private _testInputHandler: TestInputHandler | null = null;
 
   private constructor(
     socketFactory: AutoWiringSocketFactory,
@@ -405,6 +413,89 @@ export class IntegrationHarness {
   /** Get names of all registered tools. */
   getRegisteredTools(): string[] {
     return this.catalog.list().map((t) => t.name);
+  }
+
+  // -------------------------------------------------------------------------
+  // Test-input plugin convenience
+  // -------------------------------------------------------------------------
+
+  /**
+   * Register the test-input plugin's `test_respond` tool with a handler
+   * backed by a TestInputHandler instance. Returns the handler for
+   * direct access to `getResponses()`, `reset()`, etc.
+   */
+  registerTestInput(): TestInputHandler {
+    const handler = new TestInputHandler();
+    // Initialize with a mock ChannelServices that publishes through the harness event bus
+    void handler.initialize({
+      getAuditLog: async () => [],
+      getToolCatalog: () => [],
+      getSessionInfo: () => ({ group: 'test', sessionId: '', startedAt: '' }),
+      publishEvent: async (partial) => {
+        await this.eventBus.publish({
+          id: crypto.randomUUID(),
+          version: PROTOCOL_VERSION,
+          type: 'event',
+          topic: partial.topic,
+          source: partial.source,
+          correlation: null,
+          timestamp: new Date().toISOString(),
+          group: partial.group,
+          payload: partial.payload,
+        });
+      },
+    });
+
+    // Register the test_respond tool with its manifest schema
+    this.catalog.register(
+      {
+        name: 'test_respond',
+        description: 'Respond to a test prompt with a text body',
+        risk_level: 'low',
+        arguments_schema: {
+          type: 'object',
+          required: ['body'],
+          additionalProperties: false,
+          properties: {
+            body: {
+              type: 'string',
+              maxLength: 8192,
+            },
+          },
+        },
+      },
+      async (envelope: RequestEnvelope) => {
+        const args = envelope.payload.arguments;
+        const context = {
+          group: envelope.group,
+          sessionId: envelope.source,
+          correlationId: envelope.correlation,
+          timestamp: envelope.timestamp,
+        };
+        const result = await handler.handleToolInvocation('test_respond', args, context);
+        if (result.ok) {
+          return result.result;
+        }
+        throw new Error(result.error.message);
+      },
+    );
+
+    this._testInputHandler = handler;
+    return handler;
+  }
+
+  /**
+   * Submit a prompt through the test-input plugin. Requires
+   * `registerTestInput()` to have been called first.
+   *
+   * Publishes a `message.inbound` event to the event bus with the
+   * canonical schema shape. Returns the correlation ID.
+   */
+  async submitPrompt(prompt: string, options?: { group?: string }): Promise<string> {
+    if (!this._testInputHandler) {
+      throw new Error('Call registerTestInput() before submitPrompt()');
+    }
+    return this._testInputHandler.submit(prompt, options);
   }
 
   // -------------------------------------------------------------------------

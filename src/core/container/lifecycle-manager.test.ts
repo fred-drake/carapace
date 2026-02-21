@@ -137,6 +137,24 @@ describe('ContainerLifecycleManager', () => {
       expect(callOptions.env['MY_VAR']).toBe('hello');
     });
 
+    it('passes stdinData through to container run options', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(defaultSpawnRequest({ stdinData: 'ANTHROPIC_API_KEY=sk-test\n\n' }));
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.stdinData).toBe('ANTHROPIC_API_KEY=sk-test\n\n');
+    });
+
+    it('omits stdinData when not provided in SpawnRequest', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(defaultSpawnRequest());
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.stdinData).toBeUndefined();
+    });
+
     it('propagates runtime spawn failures', async () => {
       runtime.simulateRunFailure('Container engine crashed');
 

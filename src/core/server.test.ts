@@ -9,6 +9,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Server } from './server.js';
 import { FakeSocketFactory } from '../testing/fake-socket-factory.js';
 import type { SocketFs } from './socket-provisioner.js';
+import type { ContainerRuntime } from './container/runtime.js';
+import type { EventEnvelope } from '../types/protocol.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,6 +48,53 @@ function createTestServer(overrides?: {
   );
 
   return { server, socketFactory, fs, output };
+}
+
+function createMockRuntime(): ContainerRuntime {
+  return {
+    name: 'docker' as const,
+    isAvailable: vi.fn().mockResolvedValue(true),
+    version: vi.fn().mockResolvedValue('Docker 27.0.0'),
+    pull: vi.fn().mockResolvedValue(undefined),
+    imageExists: vi.fn().mockResolvedValue(true),
+    loadImage: vi.fn().mockResolvedValue(undefined),
+    build: vi.fn().mockResolvedValue('sha256:abc'),
+    inspectLabels: vi.fn().mockResolvedValue({}),
+    run: vi.fn().mockResolvedValue({
+      id: 'container-1',
+      name: 'test-container',
+      runtime: 'docker' as const,
+    }),
+    stop: vi.fn().mockResolvedValue(undefined),
+    kill: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    inspect: vi.fn().mockResolvedValue({ status: 'running' as const }),
+  };
+}
+
+function createTestServerWithRuntime() {
+  const socketFactory = new FakeSocketFactory();
+  const fs = createMockFs();
+  const output = vi.fn();
+  const runtime = createMockRuntime();
+
+  const server = new Server(
+    {
+      socketDir: '/tmp/carapace-test-sockets',
+      pluginsDir: '/tmp/carapace-test-plugins',
+      containerImage: 'carapace-agent:test',
+      configuredGroups: ['email', 'slack'],
+      maxSessionsPerGroup: 5,
+    },
+    {
+      socketFactory,
+      fs,
+      output,
+      containerRuntime: runtime,
+    },
+  );
+
+  return { server, socketFactory, fs, output, runtime };
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +228,227 @@ describe('Server', () => {
     it('creates a ResponseSanitizer', async () => {
       await server.start();
       expect(server.responseSanitizer).toBeDefined();
+    });
+  });
+
+  describe('getPluginHandler()', () => {
+    it('returns undefined for unknown plugin name after start()', async () => {
+      await server.start();
+      expect(server.getPluginHandler('unknown')).toBeUndefined();
+    });
+
+    it('returns undefined before start() is called', () => {
+      expect(server.getPluginHandler('anything')).toBeUndefined();
+    });
+  });
+
+  describe('event dispatch wiring', () => {
+    it('creates a SUB socket when containerRuntime is provided', async () => {
+      const ctx = createTestServerWithRuntime();
+      server = ctx.server;
+      socketFactory = ctx.socketFactory;
+
+      await server.start();
+
+      const subs = socketFactory.getSubscribers();
+      expect(subs.length).toBe(1);
+    });
+
+    it('does not create SUB socket when containerRuntime is absent', async () => {
+      await server.start();
+
+      const subs = socketFactory.getSubscribers();
+      expect(subs.length).toBe(0);
+    });
+
+    it('subscribes to message.inbound and task.triggered topics', async () => {
+      const ctx = createTestServerWithRuntime();
+      server = ctx.server;
+      socketFactory = ctx.socketFactory;
+
+      await server.start();
+
+      const subs = socketFactory.getSubscribers();
+      expect(subs[0].subscriptions.has('message.inbound')).toBe(true);
+      expect(subs[0].subscriptions.has('task.triggered')).toBe(true);
+    });
+
+    it('registers a message handler on the SUB socket', async () => {
+      const ctx = createTestServerWithRuntime();
+      server = ctx.server;
+      socketFactory = ctx.socketFactory;
+
+      await server.start();
+
+      const subs = socketFactory.getSubscribers();
+      expect(subs[0].handlers.length).toBe(1);
+    });
+
+    it('dispatches message.inbound events to spawn agents', async () => {
+      const ctx = createTestServerWithRuntime();
+      server = ctx.server;
+      socketFactory = ctx.socketFactory;
+
+      await server.start();
+
+      const subs = socketFactory.getSubscribers();
+
+      // Simulate a message.inbound event arriving on the SUB socket
+      const envelope: EventEnvelope = {
+        id: 'evt-1',
+        version: 1,
+        type: 'event',
+        topic: 'message.inbound',
+        source: 'test-plugin',
+        correlation: null,
+        timestamp: new Date().toISOString(),
+        group: 'email',
+        payload: {
+          channel: 'email',
+          sender: 'user@test.com',
+          content_type: 'text',
+          body: 'Hello',
+        },
+      };
+
+      const topicBuf = Buffer.from('message.inbound', 'utf-8');
+      const payloadBuf = Buffer.from(JSON.stringify(envelope), 'utf-8');
+      subs[0].handlers[0](topicBuf, payloadBuf);
+
+      // Wait for async dispatch to complete
+      await vi.waitFor(() => {
+        expect(ctx.runtime.run).toHaveBeenCalled();
+      });
+    });
+
+    it('passes container image from config to spawn request', async () => {
+      const ctx = createTestServerWithRuntime();
+      server = ctx.server;
+      socketFactory = ctx.socketFactory;
+
+      await server.start();
+
+      const subs = socketFactory.getSubscribers();
+
+      const envelope: EventEnvelope = {
+        id: 'evt-2',
+        version: 1,
+        type: 'event',
+        topic: 'message.inbound',
+        source: 'test-plugin',
+        correlation: null,
+        timestamp: new Date().toISOString(),
+        group: 'email',
+        payload: {
+          channel: 'email',
+          sender: 'user@test.com',
+          content_type: 'text',
+          body: 'Hello',
+        },
+      };
+
+      const topicBuf = Buffer.from('message.inbound', 'utf-8');
+      const payloadBuf = Buffer.from(JSON.stringify(envelope), 'utf-8');
+      subs[0].handlers[0](topicBuf, payloadBuf);
+
+      await vi.waitFor(() => {
+        expect(ctx.runtime.run).toHaveBeenCalledWith(
+          expect.objectContaining({ image: 'carapace-agent:test' }),
+        );
+      });
+    });
+
+    it('drops events for unconfigured groups', async () => {
+      const ctx = createTestServerWithRuntime();
+      server = ctx.server;
+      socketFactory = ctx.socketFactory;
+
+      await server.start();
+
+      const subs = socketFactory.getSubscribers();
+
+      const envelope: EventEnvelope = {
+        id: 'evt-3',
+        version: 1,
+        type: 'event',
+        topic: 'message.inbound',
+        source: 'test-plugin',
+        correlation: null,
+        timestamp: new Date().toISOString(),
+        group: 'unknown-group',
+        payload: {
+          channel: 'email',
+          sender: 'user@test.com',
+          content_type: 'text',
+          body: 'Hello',
+        },
+      };
+
+      const topicBuf = Buffer.from('message.inbound', 'utf-8');
+      const payloadBuf = Buffer.from(JSON.stringify(envelope), 'utf-8');
+      subs[0].handlers[0](topicBuf, payloadBuf);
+
+      // Give dispatch a tick to complete
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Should NOT have spawned a container
+      expect(ctx.runtime.run).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('stop() with event dispatch', () => {
+    it('closes SUB socket on stop', async () => {
+      const ctx = createTestServerWithRuntime();
+      server = ctx.server;
+      socketFactory = ctx.socketFactory;
+
+      await server.start();
+
+      const subs = socketFactory.getSubscribers();
+      expect(subs[0].closed).toBe(false);
+
+      await server.stop();
+      expect(subs[0].closed).toBe(true);
+    });
+
+    it('shuts down lifecycle manager containers on stop', async () => {
+      const ctx = createTestServerWithRuntime();
+      server = ctx.server;
+      socketFactory = ctx.socketFactory;
+
+      await server.start();
+
+      // Spawn a container via event dispatch
+      const subs = socketFactory.getSubscribers();
+      const envelope: EventEnvelope = {
+        id: 'evt-4',
+        version: 1,
+        type: 'event',
+        topic: 'message.inbound',
+        source: 'test-plugin',
+        correlation: null,
+        timestamp: new Date().toISOString(),
+        group: 'email',
+        payload: {
+          channel: 'email',
+          sender: 'user@test.com',
+          content_type: 'text',
+          body: 'Hello',
+        },
+      };
+
+      const topicBuf = Buffer.from('message.inbound', 'utf-8');
+      const payloadBuf = Buffer.from(JSON.stringify(envelope), 'utf-8');
+      subs[0].handlers[0](topicBuf, payloadBuf);
+
+      await vi.waitFor(() => {
+        expect(ctx.runtime.run).toHaveBeenCalled();
+      });
+
+      await server.stop();
+
+      // Lifecycle manager calls stop() then remove() for each managed container
+      expect(ctx.runtime.stop).toHaveBeenCalled();
     });
   });
 });

@@ -17,6 +17,14 @@ function createDeps(overrides?: Partial<EventDispatcherDeps>): EventDispatcherDe
   };
 }
 
+/** A valid message.inbound payload that passes schema validation. */
+const VALID_INBOUND_PAYLOAD = {
+  channel: 'email',
+  sender: 'user@example.com',
+  content_type: 'text',
+  body: 'Hello',
+};
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -39,6 +47,7 @@ describe('EventDispatcher', () => {
       const envelope = createEventEnvelope({
         topic: 'message.inbound',
         group: 'email',
+        payload: VALID_INBOUND_PAYLOAD,
       });
 
       const result = await dispatcher.dispatch(envelope);
@@ -153,6 +162,7 @@ describe('EventDispatcher', () => {
       const envelope = createEventEnvelope({
         topic: 'message.inbound',
         group: 'email',
+        payload: VALID_INBOUND_PAYLOAD,
       });
 
       const result = await dispatcher.dispatch(envelope);
@@ -175,6 +185,7 @@ describe('EventDispatcher', () => {
       const envelope = createEventEnvelope({
         topic: 'message.inbound',
         group: 'email',
+        payload: VALID_INBOUND_PAYLOAD,
       });
 
       const result = await dispatcher.dispatch(envelope);
@@ -212,11 +223,166 @@ describe('EventDispatcher', () => {
       const envelope = createEventEnvelope({
         topic: 'message.inbound',
         group: 'email',
+        payload: VALID_INBOUND_PAYLOAD,
       });
 
       const result = await dispatcher.dispatch(envelope);
 
       expect(result.action).toBe('rejected');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // message.inbound payload validation
+  // -----------------------------------------------------------------------
+
+  describe('message.inbound payload validation', () => {
+    it('spawns when payload passes schema validation', async () => {
+      const envelope = createEventEnvelope({
+        topic: 'message.inbound',
+        group: 'email',
+        payload: {
+          channel: 'email',
+          sender: 'user@example.com',
+          content_type: 'text',
+          body: 'Hello',
+        },
+      });
+
+      const result = await dispatcher.dispatch(envelope);
+
+      expect(result.action).toBe('spawned');
+    });
+
+    it('rejects message.inbound with missing required fields', async () => {
+      const envelope = createEventEnvelope({
+        topic: 'message.inbound',
+        group: 'email',
+        payload: { channel: 'email' }, // missing sender, content_type, body
+      });
+
+      const result = await dispatcher.dispatch(envelope);
+
+      expect(result.action).toBe('rejected');
+      if (result.action === 'rejected') {
+        expect(result.reason).toMatch(/payload.*validation|validation.*failed/i);
+      }
+      expect(deps.spawnAgent).not.toHaveBeenCalled();
+    });
+
+    it('rejects message.inbound with extra fields', async () => {
+      const envelope = createEventEnvelope({
+        topic: 'message.inbound',
+        group: 'email',
+        payload: {
+          channel: 'email',
+          sender: 'user@example.com',
+          content_type: 'text',
+          body: 'Hello',
+          evil: 'injected',
+        },
+      });
+
+      const result = await dispatcher.dispatch(envelope);
+
+      expect(result.action).toBe('rejected');
+      if (result.action === 'rejected') {
+        expect(result.reason).toContain('evil');
+      }
+      expect(deps.spawnAgent).not.toHaveBeenCalled();
+    });
+
+    it('rejects message.inbound with oversized body', async () => {
+      const envelope = createEventEnvelope({
+        topic: 'message.inbound',
+        group: 'email',
+        payload: {
+          channel: 'email',
+          sender: 'user@example.com',
+          content_type: 'text',
+          body: 'x'.repeat(8193),
+        },
+      });
+
+      const result = await dispatcher.dispatch(envelope);
+
+      expect(result.action).toBe('rejected');
+      expect(deps.spawnAgent).not.toHaveBeenCalled();
+    });
+
+    it('rejects message.inbound with invalid content_type', async () => {
+      const envelope = createEventEnvelope({
+        topic: 'message.inbound',
+        group: 'email',
+        payload: {
+          channel: 'email',
+          sender: 'user@example.com',
+          content_type: 'video',
+          body: 'Hello',
+        },
+      });
+
+      const result = await dispatcher.dispatch(envelope);
+
+      expect(result.action).toBe('rejected');
+      expect(deps.spawnAgent).not.toHaveBeenCalled();
+    });
+
+    it('does not validate payload for task.triggered events', async () => {
+      const envelope = createEventEnvelope({
+        topic: 'task.triggered',
+        group: 'email',
+        payload: { prompt: 'anything goes' }, // no schema validation
+      });
+
+      const result = await dispatcher.dispatch(envelope);
+
+      expect(result.action).toBe('spawned');
+    });
+
+    it('calls auditLog.append when rejecting invalid payload', async () => {
+      const auditAppend = vi.fn();
+      deps = createDeps({ auditLog: { append: auditAppend } });
+      dispatcher = new EventDispatcher(deps);
+
+      const envelope = createEventEnvelope({
+        topic: 'message.inbound',
+        group: 'email',
+        payload: { channel: 'email' }, // missing required fields
+      });
+
+      await dispatcher.dispatch(envelope);
+
+      expect(auditAppend).toHaveBeenCalledTimes(1);
+      expect(auditAppend).toHaveBeenCalledWith(
+        expect.objectContaining({
+          group: 'email',
+          topic: 'message.inbound',
+          stage: 'payload_validation',
+          outcome: 'rejected',
+        }),
+      );
+    });
+
+    it('does not call auditLog when payload is valid', async () => {
+      const auditAppend = vi.fn();
+      deps = createDeps({ auditLog: { append: auditAppend } });
+      dispatcher = new EventDispatcher(deps);
+
+      const envelope = createEventEnvelope({
+        topic: 'message.inbound',
+        group: 'email',
+        payload: {
+          channel: 'email',
+          sender: 'user@example.com',
+          content_type: 'text',
+          body: 'Hello',
+        },
+      });
+
+      await dispatcher.dispatch(envelope);
+
+      expect(auditAppend).not.toHaveBeenCalled();
     });
   });
 
@@ -250,6 +416,7 @@ describe('EventDispatcher', () => {
       const envelope = createEventEnvelope({
         topic: 'message.inbound',
         group: 'email',
+        payload: VALID_INBOUND_PAYLOAD,
       });
 
       const result = await dispatcher.dispatch(envelope);

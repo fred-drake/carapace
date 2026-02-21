@@ -9,6 +9,27 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { main } from './main.js';
 
+// Mock container runtimes so findAvailableRuntime() resolves instantly in CI
+// (without these mocks, each runtime tries to exec a real binary and times out)
+vi.mock('./core/container/apple-container-runtime.js', () => ({
+  AppleContainerRuntime: vi.fn().mockImplementation(() => ({
+    isAvailable: vi.fn().mockResolvedValue(false),
+    name: 'apple-container',
+  })),
+}));
+vi.mock('./core/container/podman-runtime.js', () => ({
+  PodmanRuntime: vi.fn().mockImplementation(() => ({
+    isAvailable: vi.fn().mockResolvedValue(false),
+    name: 'podman',
+  })),
+}));
+vi.mock('./core/container/docker-runtime.js', () => ({
+  DockerRuntime: vi.fn().mockImplementation(() => ({
+    isAvailable: vi.fn().mockResolvedValue(false),
+    name: 'docker',
+  })),
+}));
+
 // Mock cli.ts to intercept runCommand calls
 vi.mock('./cli.js', async () => {
   const actual = await vi.importActual<typeof import('./cli.js')>('./cli.js');
@@ -27,7 +48,14 @@ describe('main', () => {
 
   it('calls runCommand with parsed command and returns exit code', async () => {
     const code = await main(['node', 'carapace', 'doctor']);
-    expect(runCommand).toHaveBeenCalledWith('doctor', expect.any(Object), expect.any(Object), '');
+    expect(runCommand).toHaveBeenCalledWith(
+      'doctor',
+      expect.any(Object),
+      expect.any(Object),
+      '',
+      expect.any(Object),
+      expect.any(Array),
+    );
     expect(code).toBe(0);
   });
 
@@ -38,6 +66,8 @@ describe('main', () => {
       expect.any(Object),
       expect.objectContaining({ version: true }),
       '',
+      expect.any(Object),
+      expect.any(Array),
     );
     expect(code).toBe(0);
   });
@@ -55,6 +85,8 @@ describe('main', () => {
       expect.any(Object),
       expect.any(Object),
       'api-key',
+      expect.any(Object),
+      expect.any(Array),
     );
     expect(code).toBe(0);
   });

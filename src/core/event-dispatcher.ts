@@ -12,10 +12,17 @@
  */
 
 import type { EventEnvelope } from '../types/protocol.js';
+import { validateMessageInbound } from './event-schemas.js';
+import type { AuditEntry } from './audit-log.js';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/** Minimal audit log interface for dependency injection. */
+export interface AuditLogSink {
+  append: (entry: AuditEntry) => void;
+}
 
 /** Dependencies injected into EventDispatcher for testability. */
 export interface EventDispatcherDeps {
@@ -27,6 +34,8 @@ export interface EventDispatcherDeps {
   maxSessionsPerGroup: number;
   /** Groups that have plugin subscriptions configured. */
   configuredGroups: ReadonlySet<string>;
+  /** Optional audit log for recording rejected events. */
+  auditLog?: AuditLogSink;
 }
 
 /** Discriminated union of dispatch outcomes. */
@@ -80,6 +89,16 @@ export class EventDispatcher {
       };
     }
 
+    // message.inbound payload schema validation
+    if (topic === 'message.inbound') {
+      const validation = validateMessageInbound(envelope.payload as Record<string, unknown>);
+      if (!validation.valid) {
+        const reason = `Payload validation failed: ${validation.errors.join('; ')}`;
+        this.auditReject(envelope, reason);
+        return { action: 'rejected', reason, group };
+      }
+    }
+
     // Concurrent session limit check
     const activeCount = this.deps.getActiveSessionCount(group);
     if (activeCount >= this.deps.maxSessionsPerGroup) {
@@ -108,6 +127,21 @@ export class EventDispatcher {
   // -----------------------------------------------------------------------
   // Private helpers
   // -----------------------------------------------------------------------
+
+  /** Log a rejected event to the audit log (if configured). */
+  private auditReject(envelope: EventEnvelope, reason: string): void {
+    if (!this.deps.auditLog) return;
+    this.deps.auditLog.append({
+      timestamp: new Date().toISOString(),
+      group: envelope.group,
+      source: envelope.source,
+      topic: envelope.topic,
+      correlation: envelope.correlation,
+      stage: 'payload_validation',
+      outcome: 'rejected',
+      reason,
+    });
+  }
 
   /** Extract environment variables from the event payload for the spawn. */
   private extractSpawnEnv(envelope: EventEnvelope): Record<string, string> | undefined {
