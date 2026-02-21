@@ -43,6 +43,8 @@ import type { ServerConfig, ServerDeps } from './core/server.js';
 import { ZmqSocketFactory } from './core/zmq-socket-factory.js';
 import { resolveGitSha } from './core/image-identity.js';
 import { buildImage as buildImageFn } from './core/image-builder.js';
+import { configureLogging, createSanitizingLogSink } from './core/logger.js';
+import { ResponseSanitizer } from './core/response-sanitizer.js';
 
 // ---------------------------------------------------------------------------
 // PID file helpers
@@ -296,6 +298,16 @@ function detectProjectRoot(): string | undefined {
 export async function main(argv: string[] = process.argv): Promise<number> {
   const { command: parsedCommand, subcommand, flags, options, positionals } = parseArgs(argv);
   const home = resolveHome();
+
+  // Configure structured logging with credential sanitization
+  const logSanitizer = new ResponseSanitizer();
+  configureLogging({
+    level: flags['debug'] ? 'debug' : 'info',
+    sink: createSanitizingLogSink(
+      (entry) => process.stdout.write(JSON.stringify(entry) + '\n'),
+      logSanitizer,
+    ),
+  });
 
   // Translate flags to pseudo-commands for runCommand compatibility
   let command = parsedCommand;
