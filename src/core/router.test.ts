@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { MessageRouter } from './router.js';
 import { ToolCatalog } from './tool-catalog.js';
 import type { ToolHandler } from './tool-catalog.js';
@@ -10,6 +10,7 @@ import type {
   PipelineContext,
   PipelineResult,
 } from './pipeline/types.js';
+import { configureLogging, resetLogging, type LogEntry, type LogSink } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -319,6 +320,115 @@ describe('MessageRouter', () => {
       expect(response.payload.error).not.toBeNull();
       expect(response.payload.error!.code).toBe(ErrorCode.PLUGIN_ERROR);
       expect(response.payload.error!.message).toContain('envelope or tool not resolved');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // logging
+  // -----------------------------------------------------------------------
+
+  describe('logging', () => {
+    let logEntries: LogEntry[];
+
+    beforeEach(() => {
+      logEntries = [];
+      const logSink: LogSink = (entry) => logEntries.push(entry);
+      configureLogging({ level: 'debug', sink: logSink });
+    });
+
+    afterEach(() => {
+      resetLogging();
+    });
+
+    it('logs stage rejection with stage name and error code', async () => {
+      const catalog = new ToolCatalog();
+      const router = new MessageRouter(catalog);
+
+      const wire = createWireMessage({ topic: 'tool.invoke.nonexistent', correlation: 'c-rej' });
+      await router.processRequest(wire, makeSession());
+
+      const rejected = logEntries.find((e) => e.msg === 'stage rejected');
+      expect(rejected).toBeDefined();
+      expect(rejected!.correlation).toBe('c-rej');
+      expect(rejected!.error_code).toBe(ErrorCode.UNKNOWN_TOOL);
+      expect(rejected!.trace).toBe('stage:topic');
+    });
+
+    it('logs handler dispatch with duration on success', async () => {
+      const catalog = new ToolCatalog();
+      const tool = createToolDeclaration({ name: 'log_tool' });
+      const handler: ToolHandler = async () => ({ result: 'ok' });
+      catalog.register(tool, handler);
+
+      const router = new MessageRouter(catalog);
+      const wire = createWireMessage({
+        topic: 'tool.invoke.log_tool',
+        correlation: 'c-dispatch',
+        arguments: { input: 'test' },
+      });
+      await router.processRequest(wire, makeSession());
+
+      const dispatched = logEntries.find((e) => e.msg === 'handler dispatched');
+      expect(dispatched).toBeDefined();
+      expect(dispatched!.trace).toBe('stage:route');
+      expect(dispatched!.duration_ms).toBeDefined();
+      expect(dispatched!.ok).toBe(true);
+    });
+
+    it('logs pipeline error on handler exception', async () => {
+      const catalog = new ToolCatalog();
+      const tool = createToolDeclaration({ name: 'error_tool' });
+      const handler: ToolHandler = async () => {
+        throw new Error('handler exploded');
+      };
+      catalog.register(tool, handler);
+
+      const router = new MessageRouter(catalog);
+      const wire = createWireMessage({
+        topic: 'tool.invoke.error_tool',
+        correlation: 'c-err',
+        arguments: { input: 'test' },
+      });
+      await router.processRequest(wire, makeSession());
+
+      const errLog = logEntries.find((e) => e.msg === 'pipeline error');
+      expect(errLog).toBeDefined();
+      expect(errLog!.level).toBe('error');
+      expect(errLog!.error_code).toBe(ErrorCode.PLUGIN_ERROR);
+    });
+
+    it('includes correlation and topic in all router logs', async () => {
+      const catalog = new ToolCatalog();
+      const router = new MessageRouter(catalog);
+
+      const wire = createWireMessage({ topic: 'tool.invoke.missing', correlation: 'c-ctx' });
+      await router.processRequest(wire, makeSession());
+
+      const routerLogs = logEntries.filter((e) => e.component === 'router');
+      for (const entry of routerLogs) {
+        expect(entry.correlation).toBe('c-ctx');
+        expect(entry.topic).toBe('tool.invoke.missing');
+      }
+    });
+
+    it('logs tool resolution in stage 2', async () => {
+      const catalog = new ToolCatalog();
+      const tool = createToolDeclaration({ name: 'resolve_tool' });
+      const handler: ToolHandler = async () => ({ ok: true });
+      catalog.register(tool, handler);
+
+      const router = new MessageRouter(catalog);
+      const wire = createWireMessage({
+        topic: 'tool.invoke.resolve_tool',
+        correlation: 'c-resolve',
+        arguments: { input: 'test' },
+      });
+      await router.processRequest(wire, makeSession());
+
+      const resolveLog = logEntries.find(
+        (e) => e.component === 'pipeline:topic' && e.msg === 'tool resolved',
+      );
+      expect(resolveLog).toBeDefined();
     });
   });
 });

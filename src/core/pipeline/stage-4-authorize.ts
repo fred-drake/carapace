@@ -13,6 +13,9 @@
 import { ErrorCode, ERROR_RETRIABLE_DEFAULTS } from '../../types/errors.js';
 import type { RateLimiter } from '../rate-limiter.js';
 import type { PipelineStage, PipelineContext, PipelineResult } from './types.js';
+import { createLogger } from '../logger.js';
+
+const logger = createLogger('pipeline:authorize');
 
 // ---------------------------------------------------------------------------
 // Options
@@ -82,6 +85,10 @@ export function createStage4Authorize(options: Stage4Options): PipelineStage {
       // 2. Rate limiting (only after auth passes — don't consume tokens on auth failure)
       const rateResult = rateLimiter.tryConsume(session.sessionId, session.group);
       if (!rateResult.allowed) {
+        logger.debug('rate limited', {
+          group: session.group,
+          session: session.sessionId,
+        });
         return {
           ok: false,
           error: {

@@ -12,6 +12,9 @@ const Ajv = _Ajv.default ?? _Ajv;
 
 import { ErrorCode, ERROR_RETRIABLE_DEFAULTS } from '../../types/errors.js';
 import type { PipelineStage, PipelineContext, PipelineResult } from './types.js';
+import { createLogger } from '../logger.js';
+
+const logger = createLogger('pipeline:payload');
 
 // ---------------------------------------------------------------------------
 // Stage 3
@@ -54,6 +57,7 @@ export const stage3Payload: PipelineStage = {
 
       const firstField = errors[0]?.instancePath?.replace(/^\//, '') || undefined;
 
+      logger.debug('validation failed', { correlation: ctx.wire?.correlation, details });
       return {
         ok: false,
         error: {

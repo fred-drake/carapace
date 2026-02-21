@@ -9,6 +9,9 @@
 import { ErrorCode, ERROR_RETRIABLE_DEFAULTS } from '../../types/errors.js';
 import type { ToolCatalog } from '../tool-catalog.js';
 import type { PipelineStage, PipelineContext, PipelineResult } from './types.js';
+import { createLogger } from '../logger.js';
+
+const logger = createLogger('pipeline:topic');
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -68,6 +71,7 @@ export function createStage2Topic(catalog: ToolCatalog): PipelineStage {
         };
       }
 
+      logger.debug('tool resolved', { topic: wire.topic, toolName });
       return { ...ctx, tool: entry.tool };
     },
   };
