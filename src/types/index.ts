@@ -13,6 +13,13 @@ export {
   type RequestEnvelope,
   type ResponseEnvelope,
   type Envelope,
+  type ResponseEventBase,
+  type SystemEventPayload,
+  type ChunkEventPayload,
+  type ToolCallEventPayload,
+  type ToolResultEventPayload,
+  type EndEventPayload,
+  type ErrorEventPayload,
 } from './protocol.js';
 
 export {
