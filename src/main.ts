@@ -372,11 +372,13 @@ export async function main(argv: string[] = process.argv): Promise<number> {
             );
             // Persist composite tag so future staleness checks find it
             writeCurrentImageTag(home, identity.tag);
-            // Also tag with stable name (best effort — not all runtimes support it)
-            try {
-              await exec(runtimeBinary(runtime.name), ['tag', identity.tag, STABLE_IMAGE_NAME]);
-            } catch {
-              // Apple Containers doesn't have a tag command — the persisted file handles this
+            // Tag with stable name for runtimes that support it (Docker, Podman)
+            if (runtime.name !== 'apple-container') {
+              try {
+                await exec(runtimeBinary(runtime.name), ['tag', identity.tag, STABLE_IMAGE_NAME]);
+              } catch {
+                // Non-fatal — the persisted file is the primary staleness mechanism
+              }
             }
             return identity;
           },
