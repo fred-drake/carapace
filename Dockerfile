@@ -5,7 +5,7 @@
 # ---------------------------------------------------------------------------
 # Stage 1: builder — install deps and compile TypeScript
 # ---------------------------------------------------------------------------
-FROM node:22-slim AS builder
+FROM node:22-alpine AS builder
 
 RUN corepack enable && corepack prepare pnpm@10.28.0 --activate
 
@@ -24,13 +24,10 @@ RUN pnpm prune --prod
 # ---------------------------------------------------------------------------
 # Stage 2: runtime — minimal image for execution
 # ---------------------------------------------------------------------------
-FROM node:22-slim AS runtime
+FROM node:22-alpine AS runtime
 
-# Install libzmq for ZeroMQ native bindings + curl for Claude Code installer
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libzmq5 \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# Install bash (Claude Code installer requires it) + curl for the installer
+RUN apk add --no-cache bash curl
 
 # Claude Code version — override at build time: --build-arg CLAUDE_CODE_VERSION=2.1.49
 # CI resolves latest automatically from the release channel URL:

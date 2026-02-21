@@ -123,7 +123,7 @@ fi
 echo ""
 echo "--- Binary checks ---"
 
-if run_in_container which ipc 2>/dev/null; then
+if run_in_container command -v ipc 2>/dev/null; then
   pass "ipc binary is in PATH"
 else
   fail "ipc binary is not in PATH"
