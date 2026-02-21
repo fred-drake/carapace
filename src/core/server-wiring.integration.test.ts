@@ -100,6 +100,8 @@ function createWiredServer(overrides?: {
   configuredGroups?: string[];
   maxSessionsPerGroup?: number;
   containerImage?: string;
+  credentialsDir?: string;
+  credentialFiles?: Record<string, string>;
 }): TestContext {
   const socketFactory = new AutoWiringSocketFactory();
   const runtime = createMockRuntime();
@@ -111,11 +113,22 @@ function createWiredServer(overrides?: {
       containerImage: overrides?.containerImage ?? 'carapace-agent:integration',
       configuredGroups: overrides?.configuredGroups ?? ['email', 'slack'],
       maxSessionsPerGroup: overrides?.maxSessionsPerGroup ?? 5,
+      credentialsDir: overrides?.credentialsDir,
     },
     {
       socketFactory,
       fs: createMockFs(),
       containerRuntime: runtime,
+      credentialFs: overrides?.credentialFiles
+        ? {
+            existsSync: (path: string) => path in (overrides.credentialFiles ?? {}),
+            readFileSync: (path: string) => {
+              const files = overrides.credentialFiles ?? {};
+              if (path in files) return files[path];
+              throw new Error(`ENOENT: ${path}`);
+            },
+          }
+        : undefined,
     },
   );
 
@@ -358,5 +371,63 @@ describe('Server event-to-spawn wiring (integration)', () => {
 
     // Lifecycle manager's shutdownAll calls stop + remove on each container
     expect(ctx.runtime.stop).toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Credential injection
+  // -------------------------------------------------------------------------
+
+  it('spawned container receives stdinData when API key is configured', async () => {
+    const credsDir = '/tmp/carapace-test-creds';
+    ctx = createWiredServer({
+      credentialsDir: credsDir,
+      credentialFiles: {
+        [`${credsDir}/anthropic-api-key`]: 'sk-ant-api03-test-key',
+      },
+    });
+    await ctx.server.start();
+
+    const envelope = makeMessageInboundEnvelope('email');
+    await publishEvent(ctx.socketFactory, envelope);
+
+    await vi.waitFor(() => {
+      const runCall = (ctx.runtime.run as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as import('./container/runtime.js').ContainerRunOptions;
+      expect(runCall.stdinData).toBe('ANTHROPIC_API_KEY=sk-ant-api03-test-key\n\n');
+    });
+  });
+
+  it('spawned container receives stdinData when OAuth token is configured', async () => {
+    const credsDir = '/tmp/carapace-test-creds';
+    ctx = createWiredServer({
+      credentialsDir: credsDir,
+      credentialFiles: {
+        [`${credsDir}/claude-oauth-token`]: 'oauth-abc-123',
+      },
+    });
+    await ctx.server.start();
+
+    const envelope = makeMessageInboundEnvelope('email');
+    await publishEvent(ctx.socketFactory, envelope);
+
+    await vi.waitFor(() => {
+      const runCall = (ctx.runtime.run as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as import('./container/runtime.js').ContainerRunOptions;
+      expect(runCall.stdinData).toBe('CLAUDE_CODE_OAUTH_TOKEN=oauth-abc-123\n\n');
+    });
+  });
+
+  it('spawned container has no stdinData when no credentials are configured', async () => {
+    ctx = createWiredServer(); // no credentialsDir
+    await ctx.server.start();
+
+    const envelope = makeMessageInboundEnvelope('email');
+    await publishEvent(ctx.socketFactory, envelope);
+
+    await vi.waitFor(() => {
+      const runCall = (ctx.runtime.run as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as import('./container/runtime.js').ContainerRunOptions;
+      expect(runCall.stdinData).toBeUndefined();
+    });
   });
 });

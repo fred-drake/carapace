@@ -46,6 +46,14 @@ export interface SpawnRequest {
   workspacePath?: string;
   /** Additional environment variables for the container. */
   env?: Record<string, string>;
+  /**
+   * Data to pipe to the container's stdin after creation.
+   *
+   * Used for credential injection: formatted as `NAME=VALUE\n` lines
+   * followed by an empty line terminator. Piped via `docker create` +
+   * `docker start -ai` so credentials never appear in `docker inspect`.
+   */
+  stdinData?: string;
 }
 
 /** A container managed by the lifecycle manager. */
@@ -107,6 +115,7 @@ export class ContainerLifecycleManager {
         },
       ],
       env: { ...request.env },
+      stdinData: request.stdinData,
     };
 
     const handle = await this.runtime.run(runOptions);

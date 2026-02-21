@@ -2427,6 +2427,93 @@ captures response via `waitForResponse()`.
 
 ---
 
+## Phase WIRE — Event-to-Container Wiring
+
+> Added 2026-02-20 — Bridges event dispatch to container spawning, enables
+> CLI prompt submission, and injects task prompts into containers.
+
+### ~~WIRE-01: Server event dispatch wiring~~ DONE
+
+- **Priority**: P1 | **Complexity**: M | **Role**: ENG
+- **Status**: Completed (PR #132, merged 2026-02-20)
+- Wire EventDispatcher + ContainerLifecycleManager into Server.start()
+- Subscribe to EventBus for `message.inbound` and `task.triggered` topics
+- Server spawnAgent callback constructs SpawnRequest and delegates to
+  lifecycle manager
+
+### ~~WIRE-02: Container entrypoint prompt injection~~ DONE
+
+- **Priority**: P1 | **Complexity**: S | **Role**: ENG
+- **Status**: Completed (PR #132, merged 2026-02-20)
+- Entrypoint reads CARAPACE_TASK_PROMPT env var
+- If set, runs `claude -p "$CARAPACE_TASK_PROMPT"` (non-interactive)
+- If unset, runs normal interactive `claude` session
+
+### ~~WIRE-03: CLI prompt command~~ DONE
+
+- **Priority**: P1 | **Complexity**: S | **Role**: ENG
+- **Status**: Completed (PR #132, merged 2026-02-20)
+- `carapace prompt "text"` writes task.triggered EventEnvelope as JSON to
+  `$CARAPACE_HOME/run/prompts/{uuid}.json`
+- Server polls prompts directory, dispatches, and deletes files
+- Validates server is running via PID file check
+
+### ~~WIRE-04: Server wiring integration tests~~ DONE
+
+- **Priority**: P1 | **Complexity**: M | **Role**: QA
+- **Status**: Completed (PR #132, merged 2026-02-20)
+- 12 integration tests proving full event→validate→spawn pipeline
+- Covers message.inbound spawn, task.triggered CARAPACE_TASK_PROMPT
+  propagation, group rejection, session limits, cleanup
+
+---
+
+## Phase CRED — Credential Injection
+
+> Added 2026-02-20 — Reads stored credentials from host disk and injects
+> them into agent containers at spawn time via stdin piping.
+
+### CRED-01: Pure credential reader function
+
+- **Priority**: P1 | **Complexity**: S | **Role**: ENG
+- **Depends on**: AUTH commands (already implemented)
+- New file: `src/core/credential-reader.ts`
+- Pure function `readCredentialStdin(credentialsDir)` that reads
+  `anthropic-api-key` and/or `claude-oauth-token` files, returns formatted
+  `NAME=VALUE\n\n` string for stdin injection
+- API key takes precedence over OAuth token (inject only one)
+- Returns null if no credentials found
+- Never logs credential values
+
+### CRED-02: Extend SpawnRequest with stdinData
+
+- **Priority**: P1 | **Complexity**: S | **Role**: ENG
+- **Depends on**: CRED-01
+- Add optional `stdinData?: string` field to `SpawnRequest` interface
+- Wire through `ContainerLifecycleManager.spawn()` to
+  `ContainerRunOptions.stdinData`
+- One-line change in lifecycle manager
+
+### CRED-03: Wire credential reading into Server spawn callback
+
+- **Priority**: P1 | **Complexity**: S | **Role**: ENG
+- **Depends on**: CRED-01, CRED-02
+- In Server's `spawnAgent` callback, call `readCredentialStdin()` and pass
+  result as `stdinData` in SpawnRequest
+- Fail fast with clear error if no credentials configured
+- Add `credentialsDir` to ServerConfig (derived from CARAPACE_HOME)
+
+### CRED-04: Credential injection tests
+
+- **Priority**: P1 | **Complexity**: M | **Role**: QA
+- **Depends on**: CRED-01, CRED-02, CRED-03
+- Unit tests for `readCredentialStdin()`: API key only, OAuth only, both
+  (API key wins), neither (returns null)
+- Integration test: event dispatch → spawn includes stdinData
+- Verify credentials never appear in logs or error messages
+
+---
+
 ## Task Summary
 
 | Category  |   Count |     P0 |     P1 |     P2 |
@@ -2439,4 +2526,6 @@ captures response via `waitForResponse()`.
 | QA        |      12 |      5 |      3 |      4 |
 | IMG       |       8 |      0 |      6 |      2 |
 | INPUT     |       8 |      0 |      7 |      1 |
-| **Total** | **116** | **14** | **62** | **40** |
+| WIRE      |       4 |      0 |      4 |      0 |
+| CRED      |       4 |      0 |      4 |      0 |
+| **Total** | **124** | **14** | **70** | **40** |

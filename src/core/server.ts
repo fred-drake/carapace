@@ -28,6 +28,7 @@ import { ECHO_TOOL_DECLARATION, echoToolHandler } from './intrinsic-echo.js';
 import type { ContainerRuntime } from './container/runtime.js';
 import { ContainerLifecycleManager } from './container/lifecycle-manager.js';
 import { EventDispatcher } from './event-dispatcher.js';
+import { readCredentialStdin, type CredentialFs } from './credential-reader.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -51,6 +52,8 @@ export interface ServerConfig {
   configuredGroups?: string[];
   /** Directory to watch for CLI-submitted prompt files. */
   promptsDir?: string;
+  /** Directory containing credential files (anthropic-api-key, claude-oauth-token). */
+  credentialsDir?: string;
 }
 
 /** Minimal filesystem interface for prompt file watching. */
@@ -74,6 +77,8 @@ export interface ServerDeps {
   containerRuntime?: ContainerRuntime;
   /** Filesystem abstraction for prompt file watching. */
   promptFs?: PromptFs;
+  /** Filesystem abstraction for credential reading. */
+  credentialFs?: CredentialFs;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,6 +94,7 @@ export class Server {
   private readonly output: (msg: string) => void;
   private readonly containerRuntime: ContainerRuntime | undefined;
   private readonly promptFs: PromptFs | undefined;
+  private readonly credentialFs: CredentialFs | undefined;
 
   // Subsystems — created during start()
   private provisioner: SocketProvisioner | null = null;
@@ -113,6 +119,7 @@ export class Server {
     this.output = deps.output ?? (() => {});
     this.containerRuntime = deps.containerRuntime;
     this.promptFs = deps.promptFs;
+    this.credentialFs = deps.credentialFs;
 
     // If a custom FS is provided, store it for provisioner creation
     this.provisionerFs = deps.fs;
@@ -200,17 +207,28 @@ export class Server {
       const lifecycleManager = this.lifecycleManager;
       const config = this.config;
       const sessionManager = this.sessionManager;
+      const credFs = this.credentialFs;
 
       this.eventDispatcher = new EventDispatcher({
         getActiveSessionCount: (group) =>
           sessionManager.getAll().filter((s) => s.group === group).length,
         spawnAgent: async (group, env) => {
+          // Read credentials for injection via stdin
+          let stdinData: string | undefined;
+          if (config.credentialsDir && credFs) {
+            const creds = readCredentialStdin(config.credentialsDir, credFs);
+            if (creds) {
+              stdinData = creds;
+            }
+          }
+
           const managed = await lifecycleManager.spawn({
             group,
             image: config.containerImage ?? 'carapace-agent:latest',
             socketPath: provision.requestSocketPath,
             workspacePath: config.workspacePath,
             env,
+            stdinData,
           });
           return managed.session.sessionId;
         },

@@ -177,11 +177,13 @@ function createStartServer(home: string): {
   const socketDir = join(home, 'run', 'sockets');
   const pluginsDir = join(home, 'plugins');
   const promptsDir = join(home, 'run', 'prompts');
+  const credentialsDir = join(home, 'credentials');
 
   const config: ServerConfig = {
     socketDir,
     pluginsDir,
     promptsDir,
+    credentialsDir,
   };
 
   const deps: ServerDeps = {
@@ -193,6 +195,10 @@ function createStartServer(home: string): {
       unlinkSync: (path: string) => unlinkSync(path),
       existsSync: (path: string) => existsSync(path),
       mkdirSync: (path: string, opts?: { recursive?: boolean }) => mkdirSync(path, opts),
+    },
+    credentialFs: {
+      existsSync: (path: string) => existsSync(path),
+      readFileSync: (path: string) => readFileSync(path, 'utf-8'),
     },
   };
 
