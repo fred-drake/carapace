@@ -232,6 +232,7 @@ export class Server {
         logger: this.logger.child('lifecycle'),
         eventBus: this.eventBus ?? undefined,
         claudeSessionStore: this.claudeSessionStore ?? undefined,
+        responseSanitizer: this.responseSanitizer ?? undefined,
       });
 
       const lifecycleManager = this.lifecycleManager;

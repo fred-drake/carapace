@@ -41,6 +41,8 @@ export interface LifecycleManagerOptions {
   eventBus?: { publish(envelope: EventEnvelope): Promise<void> };
   /** Optional Claude session store for persisting --resume session IDs. Required for ContainerOutputReader. */
   claudeSessionStore?: { save(group: string, claudeSessionId: string): void };
+  /** Optional response sanitizer for credential redaction on container output events. */
+  responseSanitizer?: { sanitize(value: unknown): { value: unknown; redactedPaths: string[] } };
 }
 
 /** High-level request to spawn an agent container. */
@@ -100,6 +102,9 @@ export class ContainerLifecycleManager {
   private readonly logger: Logger;
   private readonly eventBus?: { publish(envelope: EventEnvelope): Promise<void> };
   private readonly claudeSessionStore?: { save(group: string, claudeSessionId: string): void };
+  private readonly responseSanitizer?: {
+    sanitize(value: unknown): { value: unknown; redactedPaths: string[] };
+  };
 
   /** Tracked containers indexed by session ID. */
   private readonly containers = new Map<string, ManagedContainer>();
@@ -112,6 +117,7 @@ export class ContainerLifecycleManager {
     this.logger = options.logger ?? createLogger('lifecycle');
     this.eventBus = options.eventBus;
     this.claudeSessionStore = options.claudeSessionStore;
+    this.responseSanitizer = options.responseSanitizer;
   }
 
   /**
@@ -164,6 +170,7 @@ export class ContainerLifecycleManager {
       const reader = new ContainerOutputReader({
         eventBus: this.eventBus,
         claudeSessionStore: this.claudeSessionStore,
+        sanitizer: this.responseSanitizer,
       });
       reader.start(handle.stdout, {
         sessionId: session.sessionId,

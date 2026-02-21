@@ -39,6 +39,56 @@ export interface ParsedEvent {
 /** Maximum line size in bytes before rejecting. */
 const MAX_LINE_BYTES = 1_048_576; // 1 MB
 
+/** Maximum JSON nesting depth before rejecting (matches IPC limit). */
+const MAX_JSON_DEPTH = 64;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Measure the maximum JSON nesting depth via character-level scan.
+ * Runs BEFORE JSON.parse to prevent stack overflow from deeply nested payloads.
+ * Counts `{` and `[` as depth increases, `}` and `]` as decreases.
+ * Skips characters inside JSON string literals.
+ */
+function measureJsonDepth(raw: string): number {
+  let depth = 0;
+  let maxDepth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i]!;
+
+    if (escape) {
+      escape = false;
+      continue;
+    }
+
+    if (ch === '\\' && inString) {
+      escape = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (ch === '{' || ch === '[') {
+      depth++;
+      if (depth > maxDepth) maxDepth = depth;
+    } else if (ch === '}' || ch === ']') {
+      depth--;
+    }
+  }
+
+  return maxDepth;
+}
+
 // ---------------------------------------------------------------------------
 // StreamParser
 // ---------------------------------------------------------------------------
@@ -58,6 +108,11 @@ export class StreamParser {
     // Size limit check (byte length on original line)
     if (Buffer.byteLength(line, 'utf-8') > MAX_LINE_BYTES) {
       return this.errorEvent('Line exceeds 1MB size limit');
+    }
+
+    // Depth limit check (character-level scan, before JSON.parse)
+    if (measureJsonDepth(trimmed) > MAX_JSON_DEPTH) {
+      return this.errorEvent(`JSON nesting depth exceeds ${MAX_JSON_DEPTH}-level limit`);
     }
 
     // JSON parse
@@ -140,10 +195,15 @@ export class StreamParser {
   }
 
   private parseToolResult(obj: Record<string, unknown>): ParsedEvent {
+    // Security: strip `content` from raw to prevent tool output data leakage.
+    // ToolResultEventPayload is metadata-only by design — content never leaves
+    // the container trust boundary via response.tool_result events.
+    const { content: _stripped, ...rawWithoutContent } = obj;
+
     const payload: ToolResultEventPayload = {
       toolName: (obj.name as string) ?? '',
       success: obj.is_error !== true,
-      raw: obj,
+      raw: rawWithoutContent,
       seq: this.nextSeq(),
     };
     if (typeof obj.duration_ms === 'number') {
