@@ -45,8 +45,8 @@ docker run -d \
   --read-only \
   --network none \
   --tmpfs /tmp:rw,noexec,nosuid \
-  --tmpfs /workspace:rw,size=64M \
-  --tmpfs /run/zmq:rw,size=16M \
+  --tmpfs /workspace:rw,size=64M,uid=1000,gid=1000 \
+  --tmpfs /run/zmq:rw,size=16M,uid=1000,gid=1000 \
   --entrypoint sleep \
   "$IMAGE" \
   300
