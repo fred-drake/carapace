@@ -18,6 +18,8 @@ import { ContainerOutputReader } from './container-output-reader.js';
 import { ClaudeSessionStore, CLAUDE_SESSION_MIGRATIONS } from './claude-session-store.js';
 import { EventDispatcher } from './event-dispatcher.js';
 import type { EventDispatcherDeps } from './event-dispatcher.js';
+import type { SessionPolicy } from '../types/manifest.js';
+import type { PluginHandler } from './plugin-handler.js';
 import type { EventEnvelope } from '../types/protocol.js';
 import type {
   ToolResultEventPayload,
@@ -178,7 +180,7 @@ describe('StreamParser security', () => {
       const payload = result!.payload as ToolResultEventPayload;
 
       // Top-level content field must be absent
-      expect((payload as Record<string, unknown>)['content']).toBeUndefined();
+      expect((payload as unknown as Record<string, unknown>)['content']).toBeUndefined();
       // raw.content must also be absent
       expect((payload.raw as Record<string, unknown>)['content']).toBeUndefined();
       // The secret must not appear anywhere in the serialized payload
@@ -311,7 +313,7 @@ describe('EventDispatcher security', () => {
   describe('wire session_id is never forwarded', () => {
     it('ignores session_id in event payload (fresh policy)', async () => {
       const deps = createDispatcherDeps({
-        getSessionPolicy: vi.fn(() => 'fresh'),
+        getSessionPolicy: vi.fn((): SessionPolicy => 'fresh'),
       });
       const dispatcher = new EventDispatcher(deps);
 
@@ -336,7 +338,7 @@ describe('EventDispatcher security', () => {
 
     it('ignores session_id in event payload (resume policy)', async () => {
       const deps = createDispatcherDeps({
-        getSessionPolicy: vi.fn(() => 'resume'),
+        getSessionPolicy: vi.fn((): SessionPolicy => 'resume'),
         getLatestSession: vi.fn(() => null), // no stored session
       });
       const dispatcher = new EventDispatcher(deps);
@@ -364,7 +366,7 @@ describe('EventDispatcher security', () => {
   describe('only host-resolved session IDs reach container', () => {
     it('resume session ID comes from store, not wire', async () => {
       const deps = createDispatcherDeps({
-        getSessionPolicy: vi.fn(() => 'resume'),
+        getSessionPolicy: vi.fn((): SessionPolicy => 'resume'),
         getLatestSession: vi.fn(() => 'host-resolved-session-id'),
       });
       const dispatcher = new EventDispatcher(deps);
@@ -392,15 +394,17 @@ describe('EventDispatcher security', () => {
   describe('resolveSession errors do not leak internal state', () => {
     it('error result contains message but not stack trace', async () => {
       const deps = createDispatcherDeps({
-        getSessionPolicy: vi.fn(() => 'explicit'),
-        getPluginHandler: vi.fn(() => ({
-          initialize: async () => {},
-          handleToolInvocation: async () => ({ ok: true, result: {} }),
-          shutdown: async () => {},
-          resolveSession: async () => {
-            throw new Error('Internal DB error at /opt/carapace/data/sessions.sqlite');
-          },
-        })),
+        getSessionPolicy: vi.fn((): SessionPolicy => 'explicit'),
+        getPluginHandler: vi.fn(
+          (): PluginHandler => ({
+            initialize: async () => {},
+            handleToolInvocation: async () => ({ ok: true as const, result: {} }),
+            shutdown: async () => {},
+            resolveSession: async () => {
+              throw new Error('Internal DB error at /opt/carapace/data/sessions.sqlite');
+            },
+          }),
+        ),
         createSessionLookup: vi.fn(() => ({
           latest: async () => null,
           find: async () => [],
@@ -528,7 +532,7 @@ describe('ContainerOutputReader security', () => {
 describe('env var naming consistency', () => {
   it('EventDispatcher uses CARAPACE_RESUME_SESSION_ID (not CARAPACE_RESUME_SESSION)', async () => {
     const deps = createDispatcherDeps({
-      getSessionPolicy: vi.fn(() => 'resume'),
+      getSessionPolicy: vi.fn((): SessionPolicy => 'resume'),
       getLatestSession: vi.fn(() => VALID_UUID),
     });
     const dispatcher = new EventDispatcher(deps);

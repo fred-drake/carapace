@@ -20,7 +20,7 @@ import type {
 import { createTestSessionLookup } from '../testing/plugin-test-sdk.js';
 
 import _Ajv from 'ajv';
-const Ajv = (_Ajv as unknown as { default: typeof _Ajv }).default ?? _Ajv;
+const Ajv = _Ajv.default ?? _Ajv;
 
 // ---------------------------------------------------------------------------
 // Helpers

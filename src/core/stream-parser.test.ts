@@ -165,7 +165,7 @@ describe('StreamParser', () => {
     expect(payload.durationMs).toBe(42);
     expect(payload.seq).toBe(1);
     // Security: no content leaks into the payload (metadata only)
-    expect((payload as Record<string, unknown>)['content']).toBeUndefined();
+    expect((payload as unknown as Record<string, unknown>)['content']).toBeUndefined();
     // Security: content is also stripped from raw to prevent data leakage
     expect((payload.raw as Record<string, unknown>)['content']).toBeUndefined();
     // Verify other raw fields are preserved
