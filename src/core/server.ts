@@ -11,6 +11,8 @@
  * @see docs/ARCHITECTURE.md for the full system design
  */
 
+import { join } from 'node:path';
+import Database from 'better-sqlite3';
 import type { SocketFactory } from '../types/socket.js';
 import type { WireMessage, EventEnvelope } from '../types/protocol.js';
 import { SocketProvisioner } from './socket-provisioner.js';
@@ -28,6 +30,7 @@ import { ECHO_TOOL_DECLARATION, echoToolHandler } from './intrinsic-echo.js';
 import type { ContainerRuntime } from './container/runtime.js';
 import { ContainerLifecycleManager } from './container/lifecycle-manager.js';
 import { EventDispatcher } from './event-dispatcher.js';
+import { ClaudeSessionStore, CLAUDE_SESSION_MIGRATIONS } from './claude-session-store.js';
 import { readCredentialStdin, type CredentialFs } from './credential-reader.js';
 import { createLogger, type Logger } from './logger.js';
 
@@ -55,6 +58,10 @@ export interface ServerConfig {
   promptsDir?: string;
   /** Directory containing credential files (anthropic-api-key, claude-oauth-token). */
   credentialsDir?: string;
+  /** Base directory for per-group Claude Code state (e.g. `$CARAPACE_HOME/data/claude-state/`). */
+  claudeStateDir?: string;
+  /** Path to the SQLite database for ClaudeSessionStore. */
+  sessionDbPath?: string;
 }
 
 /** Minimal filesystem interface for prompt file watching. */
@@ -109,6 +116,7 @@ export class Server {
   private lifecycleManager: ContainerLifecycleManager | null = null;
   private eventDispatcher: EventDispatcher | null = null;
   private eventSubscription: SubscriptionHandle | null = null;
+  private claudeSessionStore: ClaudeSessionStore | null = null;
   private promptPollTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
 
@@ -211,16 +219,26 @@ export class Server {
 
     // 7. Wire event dispatch pipeline (when container runtime is available)
     if (this.containerRuntime) {
+      // Create ClaudeSessionStore if sessionDbPath is configured
+      if (this.config.sessionDbPath) {
+        const db = new Database(this.config.sessionDbPath);
+        db.pragma('journal_mode = WAL');
+        this.claudeSessionStore = ClaudeSessionStore.create(db, CLAUDE_SESSION_MIGRATIONS);
+      }
+
       this.lifecycleManager = new ContainerLifecycleManager({
         runtime: this.containerRuntime,
         sessionManager: this.sessionManager,
         logger: this.logger.child('lifecycle'),
+        eventBus: this.eventBus ?? undefined,
+        claudeSessionStore: this.claudeSessionStore ?? undefined,
       });
 
       const lifecycleManager = this.lifecycleManager;
       const config = this.config;
       const sessionManager = this.sessionManager;
       const credFs = this.credentialFs;
+      const claudeSessionStore = this.claudeSessionStore;
 
       this.eventDispatcher = new EventDispatcher({
         logger: this.logger.child('event-dispatcher'),
@@ -243,11 +261,33 @@ export class Server {
             workspacePath: config.workspacePath,
             env,
             stdinData,
+            claudeStatePath: config.claudeStateDir ? join(config.claudeStateDir, group) : undefined,
           });
           return managed.session.sessionId;
         },
         maxSessionsPerGroup: config.maxSessionsPerGroup ?? 3,
         configuredGroups: new Set(config.configuredGroups ?? []),
+        getSessionPolicy: () => 'fresh',
+        getLatestSession: claudeSessionStore
+          ? (group) => claudeSessionStore.getLatest(group)
+          : undefined,
+        getPluginHandler: (group) => this.pluginLoader?.getHandler(group),
+        createSessionLookup: claudeSessionStore
+          ? (group) => ({
+              latest: async () => claudeSessionStore.getLatest(group),
+              find: async (criteria) =>
+                claudeSessionStore
+                  .list(group)
+                  .map((r) => ({
+                    sessionId: r.claudeSessionId,
+                    group: r.group,
+                    startedAt: r.createdAt,
+                    endedAt: null,
+                    resumable: true,
+                  }))
+                  .slice(0, criteria.limit ?? 10),
+            })
+          : undefined,
       });
 
       const dispatcher = this.eventDispatcher;
@@ -328,6 +368,12 @@ export class Server {
       this.lifecycleManager = null;
     }
     this.eventDispatcher = null;
+
+    // 4a. Close ClaudeSessionStore database
+    if (this.claudeSessionStore) {
+      this.claudeSessionStore.close();
+      this.claudeSessionStore = null;
+    }
 
     // 5. Shutdown plugins
     if (this.pluginLoader) {
