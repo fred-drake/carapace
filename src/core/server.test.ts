@@ -11,6 +11,7 @@ import { FakeSocketFactory } from '../testing/fake-socket-factory.js';
 import type { SocketFs } from './socket-provisioner.js';
 import type { ContainerRuntime } from './container/runtime.js';
 import type { EventEnvelope } from '../types/protocol.js';
+import { configureLogging, resetLogging, type LogEntry, type LogSink } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -449,6 +450,180 @@ describe('Server', () => {
 
       // Lifecycle manager calls stop() then remove() for each managed container
       expect(ctx.runtime.stop).toHaveBeenCalled();
+    });
+  });
+
+  describe('logging', () => {
+    let logEntries: LogEntry[];
+    let logSink: LogSink;
+
+    beforeEach(() => {
+      logEntries = [];
+      logSink = (entry) => logEntries.push(entry);
+      configureLogging({ level: 'debug', sink: logSink });
+    });
+
+    afterEach(() => {
+      resetLogging();
+    });
+
+    it('logs server starting and ready on start()', async () => {
+      const ctx = createTestServer();
+      server = ctx.server;
+
+      await server.start();
+
+      const msgs = logEntries.map((e) => e.msg);
+      expect(msgs).toContain('server starting');
+      expect(msgs).toContain('server ready');
+    });
+
+    it('logs server stopping and stopped on stop()', async () => {
+      const ctx = createTestServer();
+      server = ctx.server;
+
+      await server.start();
+      logEntries.length = 0; // Clear start logs
+      await server.stop();
+
+      const msgs = logEntries.map((e) => e.msg);
+      expect(msgs).toContain('server stopping');
+      expect(msgs).toContain('server stopped');
+    });
+
+    it('logs request received with correlation and topic', async () => {
+      const ctx = createTestServer();
+      server = ctx.server;
+
+      await server.start();
+      logEntries.length = 0;
+
+      // Simulate a request arriving on the ROUTER socket via handler
+      const routers = ctx.socketFactory.getRouters();
+      const wire = {
+        topic: 'tool.invoke.echo',
+        correlation: 'corr-log-1',
+        arguments: { message: 'hi' },
+      };
+      const identity = Buffer.from('dealer-test');
+      const delimiter = Buffer.alloc(0);
+      const payload = Buffer.from(JSON.stringify(wire));
+      // Trigger the message handler registered on the router
+      for (const handler of routers[0].handlers) {
+        handler(identity, delimiter, payload);
+      }
+
+      // Wait for async handling
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const received = logEntries.find((e) => e.msg === 'request received');
+      expect(received).toBeDefined();
+      expect(received!.correlation).toBe('corr-log-1');
+      expect(received!.topic).toBe('tool.invoke.echo');
+    });
+
+    it('logs request completed with duration and ok status', async () => {
+      const ctx = createTestServer();
+      server = ctx.server;
+
+      await server.start();
+      logEntries.length = 0;
+
+      const routers = ctx.socketFactory.getRouters();
+      const wire = {
+        topic: 'tool.invoke.echo',
+        correlation: 'corr-log-2',
+        arguments: { text: 'test' },
+      };
+      const identity = Buffer.from('dealer-test2');
+      const delimiter = Buffer.alloc(0);
+      const payload = Buffer.from(JSON.stringify(wire));
+      for (const handler of routers[0].handlers) {
+        handler(identity, delimiter, payload);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const completed = logEntries.find((e) => e.msg === 'request completed');
+      expect(completed).toBeDefined();
+      expect(completed!.correlation).toBe('corr-log-2');
+      expect(completed!.duration_ms).toBeDefined();
+      expect(typeof completed!.duration_ms).toBe('number');
+      expect(completed!.ok).toBe(true);
+    });
+
+    it('logs request-channel bind via child logger', async () => {
+      const ctx = createTestServer();
+      server = ctx.server;
+
+      await server.start();
+
+      const bindLog = logEntries.find((e) => e.msg === 'ROUTER socket bound');
+      expect(bindLog).toBeDefined();
+      expect(bindLog!.component).toBe('server:request-channel');
+    });
+
+    it('accepts injected logger via ServerDeps', async () => {
+      const customEntries: LogEntry[] = [];
+      const customSink: LogSink = (entry) => customEntries.push(entry);
+      configureLogging({ level: 'debug', sink: customSink });
+
+      const fs = createMockFs();
+      const customServer = new Server(
+        { socketDir: '/tmp/test-sockets', pluginsDir: '/tmp/test-plugins' },
+        { socketFactory: new FakeSocketFactory(), fs, output: vi.fn() },
+      );
+
+      await customServer.start();
+
+      const msgs = customEntries.map((e) => e.msg);
+      expect(msgs).toContain('server starting');
+      expect(msgs).toContain('server ready');
+
+      await customServer.stop();
+    });
+
+    it('uses server component name for logger', async () => {
+      const ctx = createTestServer();
+      server = ctx.server;
+
+      await server.start();
+
+      const serverLogs = logEntries.filter((e) => e.component === 'server');
+      expect(serverLogs.length).toBeGreaterThan(0);
+    });
+
+    it('logs response send failure as warning', async () => {
+      const ctx = createTestServer();
+      server = ctx.server;
+
+      await server.start();
+      logEntries.length = 0;
+
+      // Send a request then force send failure
+      const routers = ctx.socketFactory.getRouters();
+      const wire = {
+        topic: 'tool.invoke.echo',
+        correlation: 'corr-fail',
+        arguments: { message: 'fail test' },
+      };
+
+      // Override the router's send to throw
+      routers[0].send = async () => {
+        throw new Error('Connection closed');
+      };
+
+      const identity = Buffer.from('dealer-fail');
+      const delimiter = Buffer.alloc(0);
+      const payload = Buffer.from(JSON.stringify(wire));
+      for (const handler of routers[0].handlers) {
+        handler(identity, delimiter, payload);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      const failLog = logEntries.find((e) => e.msg === 'response send failed');
+      expect(failLog).toBeDefined();
     });
   });
 });

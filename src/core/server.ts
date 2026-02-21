@@ -29,6 +29,7 @@ import type { ContainerRuntime } from './container/runtime.js';
 import { ContainerLifecycleManager } from './container/lifecycle-manager.js';
 import { EventDispatcher } from './event-dispatcher.js';
 import { readCredentialStdin, type CredentialFs } from './credential-reader.js';
+import { createLogger, type Logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -79,6 +80,8 @@ export interface ServerDeps {
   promptFs?: PromptFs;
   /** Filesystem abstraction for credential reading. */
   credentialFs?: CredentialFs;
+  /** Logger instance for structured logging. */
+  logger?: Logger;
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +98,7 @@ export class Server {
   private readonly containerRuntime: ContainerRuntime | undefined;
   private readonly promptFs: PromptFs | undefined;
   private readonly credentialFs: CredentialFs | undefined;
+  private readonly logger: Logger;
 
   // Subsystems — created during start()
   private provisioner: SocketProvisioner | null = null;
@@ -120,6 +124,7 @@ export class Server {
     this.containerRuntime = deps.containerRuntime;
     this.promptFs = deps.promptFs;
     this.credentialFs = deps.credentialFs;
+    this.logger = deps.logger ?? createLogger('server');
 
     // If a custom FS is provided, store it for provisioner creation
     this.provisionerFs = deps.fs;
@@ -150,6 +155,8 @@ export class Server {
       throw new Error('Server is already started');
     }
 
+    this.logger.info('server starting', { socketDir: this.config.socketDir });
+
     // 1. Socket provisioner — manages socket file paths
     const provisionerOpts: { socketDir: string; fs?: SocketFs } = {
       socketDir: this.config.socketDir,
@@ -167,7 +174,11 @@ export class Server {
     const provision = this.provisioner.provision(SERVER_SESSION_ID);
 
     // 3. Bind RequestChannel and EventBus
-    this.requestChannel = new RequestChannel(this.socketFactory);
+    this.requestChannel = new RequestChannel(
+      this.socketFactory,
+      undefined,
+      this.logger.child('request-channel'),
+    );
     await this.requestChannel.bind(provision.requestAddress);
 
     this.eventBus = new EventBus(this.socketFactory);
@@ -266,6 +277,7 @@ export class Server {
     this.started = true;
 
     // 9. Report ready
+    this.logger.info('server ready');
     this.output('Server ready');
   }
 
@@ -280,6 +292,8 @@ export class Server {
     if (!this.started) {
       return;
     }
+
+    this.logger.info('server stopping');
 
     // 0. Stop prompt polling
     if (this.promptPollTimer) {
@@ -332,6 +346,7 @@ export class Server {
     this.sessionManager = null;
 
     this.started = false;
+    this.logger.info('server stopped');
   }
 
   // -------------------------------------------------------------------------
@@ -351,6 +366,13 @@ export class Server {
       return;
     }
 
+    const startTime = Date.now();
+    const reqLogger = this.logger.withContext({
+      correlation: wire.correlation,
+      topic: wire.topic,
+    });
+    reqLogger.info('request received', { connectionIdentity });
+
     // Look up session by connection identity
     let session = this.sessionManager?.getByConnectionIdentity(connectionIdentity);
     if (!session) {
@@ -361,9 +383,13 @@ export class Server {
           group: 'default',
           connectionIdentity,
         }) ?? null;
+      if (session) {
+        reqLogger.debug('session auto-created', { session: session.sessionId });
+      }
     }
 
     if (!session) {
+      reqLogger.warn('no session available');
       return;
     }
 
@@ -382,11 +408,21 @@ export class Server {
       payload: sanitized.value as typeof response.payload,
     };
 
+    const hasError = response.payload.error !== null;
+    const duration_ms = Date.now() - startTime;
+    reqLogger.info('request completed', {
+      duration_ms,
+      ok: !hasError,
+      error_code: hasError ? (response.payload.error as { code?: string })?.code : undefined,
+    });
+
     // Send back to the DEALER
     try {
       await this.requestChannel.sendResponse(connectionIdentity, sanitizedResponse);
-    } catch {
-      // Connection may have been closed — log and continue
+    } catch (err) {
+      reqLogger.warn('response send failed', {
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
     }
   }
 

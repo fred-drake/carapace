@@ -9,6 +9,7 @@ import type {
   SubscriberSocket,
   DealerSocket,
 } from '../types/socket.js';
+import { configureLogging, resetLogging, type LogEntry, type LogSink } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Fake RouterSocket
@@ -527,6 +528,96 @@ describe('RequestChannel', () => {
       await channel.bind('ipc:///tmp/test-new.sock');
 
       expect(factory.lastRouter!.boundAddress).toBe('ipc:///tmp/test-new.sock');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // logging
+  // -------------------------------------------------------------------------
+
+  describe('logging', () => {
+    let logEntries: LogEntry[];
+
+    beforeEach(() => {
+      logEntries = [];
+      const logSink: LogSink = (entry) => logEntries.push(entry);
+      configureLogging({ level: 'debug', sink: logSink });
+    });
+
+    afterEach(() => {
+      resetLogging();
+    });
+
+    it('logs ROUTER socket bound on bind()', async () => {
+      channel = new RequestChannel(factory);
+      await channel.bind('ipc:///tmp/test-log.sock');
+
+      const bindLog = logEntries.find((e) => e.msg === 'ROUTER socket bound');
+      expect(bindLog).toBeDefined();
+      expect(bindLog!.meta).toEqual({ address: 'ipc:///tmp/test-log.sock' });
+    });
+
+    it('logs frame received on incoming request', async () => {
+      channel = new RequestChannel(factory);
+      channel.onRequest(vi.fn());
+      await channel.bind('ipc:///tmp/test-log2.sock');
+
+      const wire = makeWireMessage('tool.invoke.test', 'corr-log-1');
+      simulateDealerMessage(factory.lastRouter!, 'dealer-log', wire);
+
+      const frameLog = logEntries.find((e) => e.msg === 'frame received');
+      expect(frameLog).toBeDefined();
+      expect(frameLog!.correlation).toBe('corr-log-1');
+      expect(frameLog!.topic).toBe('tool.invoke.test');
+    });
+
+    it('logs malformed JSON dropped as warning', async () => {
+      channel = new RequestChannel(factory);
+      channel.onRequest(vi.fn());
+      await channel.bind('ipc:///tmp/test-log3.sock');
+
+      const identity = makeIdentityBuffer('dealer-bad');
+      const delimiter = Buffer.alloc(0);
+      const badPayload = Buffer.from('not-valid-json');
+      factory.lastRouter!.simulateMessage(identity, delimiter, badPayload);
+
+      const dropLog = logEntries.find((e) => e.msg === 'malformed JSON dropped');
+      expect(dropLog).toBeDefined();
+      expect(dropLog!.level).toBe('warn');
+    });
+
+    it('logs response sent on sendResponse()', async () => {
+      channel = new RequestChannel(factory);
+      channel.onRequest(vi.fn());
+      await channel.bind('ipc:///tmp/test-log4.sock');
+
+      const wire = makeWireMessage('tool.invoke.test', 'corr-log-resp');
+      simulateDealerMessage(factory.lastRouter!, 'dealer-resp', wire);
+
+      await channel.sendResponse(makeIdentity('dealer-resp'), makeResponse('corr-log-resp'));
+
+      const sentLog = logEntries.find((e) => e.msg === 'response sent');
+      expect(sentLog).toBeDefined();
+      expect(sentLog!.correlation).toBe('corr-log-resp');
+    });
+
+    it('logs request timed out as warning', async () => {
+      channel = new RequestChannel(factory, { timeoutMs: 1000 });
+      channel.onRequest(vi.fn());
+      await channel.bind('ipc:///tmp/test-log5.sock');
+
+      simulateDealerMessage(
+        factory.lastRouter!,
+        'dealer-timeout',
+        makeWireMessage('tool.invoke.slow', 'corr-timeout-log'),
+      );
+
+      vi.advanceTimersByTime(1001);
+
+      const timeoutLog = logEntries.find((e) => e.msg === 'request timed out');
+      expect(timeoutLog).toBeDefined();
+      expect(timeoutLog!.level).toBe('warn');
+      expect(timeoutLog!.correlation).toBe('corr-timeout-log');
     });
   });
 });
