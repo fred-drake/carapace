@@ -14,6 +14,9 @@
 > (IMG-01 through IMG-08, PRs #120-128).
 > Updated (2026-02-20) — Phase INPUT tasks added (INPUT-01 through INPUT-08).
 > Test input plugin for programmatic prompt injection and e2e testing foundation.
+> Updated (2026-02-21) — Phase STREAM tasks added and completed
+> (STREAM-01 through STREAM-16, PRs #139-155). Streaming response events,
+> session management, and security hardening.
 > Organized by priority tier, then by role. Tasks reference each other by ID.
 
 ## Legend
@@ -2514,6 +2517,113 @@ captures response via `waitForResponse()`.
 
 ---
 
+## ~~Phase STREAM — Streaming Response Events & Session Management~~ DONE
+
+**Status**: Completed (PRs #139-155, merged 2026-02-21)
+
+Captures Claude Code stream-json output, publishes typed response events on
+the EventBus, persists Claude session IDs for `--resume`, and adds session
+policy control (fresh/resume/explicit) to the event dispatch pipeline.
+
+### ~~STREAM-01: Add response.\* topic types to protocol~~ DONE
+
+- **Priority**: P1 | **Complexity**: S | **Role**: Engineer
+- **Status**: Completed (PR #139, merged 2026-02-21)
+- Add response.system, response.chunk, response.tool_call, response.tool_result,
+  response.end, response.error topics and payload interfaces to protocol.ts
+
+### ~~STREAM-02+03: StreamParser + tests (TDD)~~ DONE
+
+- **Priority**: P1 | **Complexity**: M | **Role**: Engineer
+- **Status**: Completed (PR #142, merged 2026-02-21)
+- **Depends on**: STREAM-01
+- Pure stateful NDJSON parser classifying Claude Code stream-json lines into
+  typed events. 1MB line limit, monotonic seq counter, malformed → response.error
+
+### ~~STREAM-04+05: ClaudeSessionStore + tests (TDD)~~ DONE
+
+- **Priority**: P1 | **Complexity**: M | **Role**: Engineer
+- **Status**: Completed (PR #141, merged 2026-02-21)
+- SQLite-backed persistent store for Claude Code --resume session IDs.
+  UUID validation, configurable TTL (24h default), group isolation, upsert
+
+### ~~STREAM-06: Extend ContainerHandle with stdout/stderr streams~~ DONE
+
+- **Priority**: P1 | **Complexity**: S | **Role**: Engineer
+- **Status**: Completed (PR #143, merged 2026-02-21)
+- Add optional stdout/stderr ReadableStream to ContainerHandle interface.
+  Change SpawnFn stdio from 'ignore' to 'pipe'
+
+### ~~STREAM-07+08: ContainerOutputReader + tests (TDD)~~ DONE
+
+- **Priority**: P1 | **Complexity**: M | **Role**: Engineer
+- **Status**: Completed (PR #147, merged 2026-02-21)
+- **Depends on**: STREAM-01, STREAM-02+03
+- Bridges container stdout → StreamParser → EventBus. Publishes typed event
+  envelopes, persists Claude session IDs from response.system/end events
+
+### ~~STREAM-09+14: Session policy manifest + test SDK helpers~~ DONE
+
+- **Priority**: P1 | **Complexity**: M | **Role**: DX
+- **Status**: Completed (PR #144, merged 2026-02-21)
+- Add SessionPolicy type (fresh/resume/explicit) to manifest. Add
+  resolveSession() to PluginHandler. createTestSessionLookup() SDK helper.
+  Plugin loader validates explicit policy requires resolveSession()
+
+### ~~STREAM-10: EventDispatcher session policy logic~~ DONE
+
+- **Priority**: P1 | **Complexity**: M | **Role**: Engineer
+- **Status**: Completed (PR #146, merged 2026-02-21)
+- **Depends on**: STREAM-09+14
+- Add getSessionPolicy, getLatestSession, getPluginHandler, createSessionLookup
+  to EventDispatcherDeps. Resolve session per policy, pass CARAPACE_RESUME_SESSION_ID
+  env var. Wire never trusts session_id from event payload
+
+### ~~STREAM-11: Container entrypoint --resume support~~ DONE
+
+- **Priority**: P1 | **Complexity**: S | **Role**: DevOps
+- **Status**: Completed (PR #140, merged 2026-02-21)
+- Entrypoint reads CARAPACE_RESUME_SESSION_ID env var, passes --resume to
+  claude -p. Also adds --output-format stream-json --verbose for non-interactive
+
+### ~~STREAM-12: LifecycleManager integration~~ DONE
+
+- **Priority**: P1 | **Complexity**: M | **Role**: Engineer
+- **Status**: Completed (PR #148, merged 2026-02-21)
+- **Depends on**: STREAM-06, STREAM-07+08, STREAM-10
+- Wire ContainerOutputReader into LifecycleManager.spawn(). Add eventBus
+  and claudeSessionStore to options. Add claudeStatePath per-group .claude/
+  mount isolation (security P0)
+
+### ~~STREAM-13: Server + main.ts wiring~~ DONE
+
+- **Priority**: P1 | **Complexity**: M | **Role**: Engineer
+- **Status**: Completed (PR #151, merged 2026-02-21)
+- **Depends on**: STREAM-10, STREAM-12
+- Add claudeStateDir and sessionDbPath to ServerConfig. Create ClaudeSessionStore
+  in Server.start(), pass to LifecycleManager and EventDispatcher. Wire
+  EventBus into LifecycleManager. Update createStartServer() in main.ts
+
+### ~~STREAM-15: Integration tests~~ DONE
+
+- **Priority**: P1 | **Complexity**: M | **Role**: QA
+- **Status**: Completed (PR #153, merged 2026-02-21)
+- **Depends on**: STREAM-07+08, STREAM-10, STREAM-12, STREAM-13
+- 22 integration tests: full pipeline flow, session persistence, resume/explicit/
+  fresh policies, error resilience, tool_result metadata-only, TTL enforcement
+
+### ~~STREAM-16: Security hardening review~~ DONE
+
+- **Priority**: P0 | **Complexity**: M | **Role**: Security
+- **Status**: Completed (PR #155, merged 2026-02-21)
+- **Depends on**: STREAM-15
+- Found CRITICAL: env var name mismatch (resume was broken). HIGH: raw field
+  in tool_result leaked content. MEDIUM: no UUID validation in entrypoint,
+  no credential sanitization on EventBus events. LOW: no JSON depth limit.
+  All fixed with 20+ security tests
+
+---
+
 ## Task Summary
 
 | Category  |   Count |     P0 |     P1 |     P2 |
@@ -2528,4 +2638,5 @@ captures response via `waitForResponse()`.
 | INPUT     |       8 |      0 |      7 |      1 |
 | WIRE      |       4 |      0 |      4 |      0 |
 | CRED      |       4 |      0 |      4 |      0 |
-| **Total** | **124** | **14** | **70** | **40** |
+| STREAM    |      12 |      1 |     11 |      0 |
+| **Total** | **136** | **15** | **81** | **40** |
