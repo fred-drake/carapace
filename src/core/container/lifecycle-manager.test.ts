@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { PassThrough } from 'node:stream';
 import { ContainerLifecycleManager } from './lifecycle-manager.js';
 import { MockContainerRuntime } from './mock-runtime.js';
 import { SessionManager } from '../session-manager.js';
@@ -543,6 +544,198 @@ describe('ContainerLifecycleManager', () => {
       const cleanupLog = logEntries.find((e) => e.msg === 'orphan cleanup complete');
       expect(cleanupLog).toBeDefined();
       expect(cleanupLog!.meta?.cleaned).toBe(0);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // ContainerOutputReader integration
+  // -----------------------------------------------------------------------
+
+  describe('ContainerOutputReader integration', () => {
+    it('starts ContainerOutputReader when eventBus, claudeSessionStore, and stdout are available', async () => {
+      const stdout = new PassThrough();
+      runtime.setNextStdout(stdout);
+
+      const eventBus = { publish: vi.fn().mockResolvedValue(undefined) };
+      const claudeSessionStore = { save: vi.fn() };
+
+      const readerManager = new ContainerLifecycleManager({
+        runtime,
+        sessionManager,
+        shutdownTimeoutMs: 500,
+        eventBus,
+        claudeSessionStore,
+      });
+
+      const result = await readerManager.spawn(defaultSpawnRequest());
+
+      // The reader should have been started — verify by writing a line
+      // to stdout and checking that eventBus.publish was called
+      stdout.write('{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n');
+      stdout.end();
+
+      // Give the async reader a tick to process
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(result.handle.stdout).toBeDefined();
+      expect(eventBus.publish).toHaveBeenCalled();
+    });
+
+    it('does not create a reader when eventBus is not provided', async () => {
+      const stdout = new PassThrough();
+      runtime.setNextStdout(stdout);
+
+      const claudeSessionStore = { save: vi.fn() };
+
+      const readerManager = new ContainerLifecycleManager({
+        runtime,
+        sessionManager,
+        shutdownTimeoutMs: 500,
+        claudeSessionStore,
+      });
+
+      const result = await readerManager.spawn(defaultSpawnRequest());
+
+      // stdout is available but no eventBus — no reader should be created
+      stdout.write('{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n');
+      stdout.end();
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // No crash, no errors — backward compatible
+      expect(result.handle.stdout).toBeDefined();
+    });
+
+    it('does not create a reader when claudeSessionStore is not provided', async () => {
+      const stdout = new PassThrough();
+      runtime.setNextStdout(stdout);
+
+      const eventBus = { publish: vi.fn().mockResolvedValue(undefined) };
+
+      const readerManager = new ContainerLifecycleManager({
+        runtime,
+        sessionManager,
+        shutdownTimeoutMs: 500,
+        eventBus,
+      });
+
+      const result = await readerManager.spawn(defaultSpawnRequest());
+
+      stdout.write('{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n');
+      stdout.end();
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // eventBus.publish should NOT have been called — no reader
+      expect(eventBus.publish).not.toHaveBeenCalled();
+      expect(result.handle.stdout).toBeDefined();
+    });
+
+    it('does not create a reader when stdout is not available', async () => {
+      // Default mock runtime returns no stdout
+      const eventBus = { publish: vi.fn().mockResolvedValue(undefined) };
+      const claudeSessionStore = { save: vi.fn() };
+
+      const readerManager = new ContainerLifecycleManager({
+        runtime,
+        sessionManager,
+        shutdownTimeoutMs: 500,
+        eventBus,
+        claudeSessionStore,
+      });
+
+      const result = await readerManager.spawn(defaultSpawnRequest());
+
+      // No stdout — no reader, no crash
+      expect(result.handle.stdout).toBeUndefined();
+      expect(eventBus.publish).not.toHaveBeenCalled();
+    });
+
+    it('does not block spawn return while reader is processing', async () => {
+      const stdout = new PassThrough();
+      runtime.setNextStdout(stdout);
+
+      const eventBus = { publish: vi.fn().mockResolvedValue(undefined) };
+      const claudeSessionStore = { save: vi.fn() };
+
+      const readerManager = new ContainerLifecycleManager({
+        runtime,
+        sessionManager,
+        shutdownTimeoutMs: 500,
+        eventBus,
+        claudeSessionStore,
+      });
+
+      // spawn should return immediately, not wait for stdout to close
+      const result = await readerManager.spawn(defaultSpawnRequest());
+      expect(result.handle).toBeDefined();
+      expect(result.session).toBeDefined();
+
+      // Clean up — end the stream
+      stdout.end();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Per-group .claude/ state mount
+  // -----------------------------------------------------------------------
+
+  describe('claudeStatePath', () => {
+    it('mounts claudeStatePath as a volume when provided', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(defaultSpawnRequest({ claudeStatePath: '/data/claude-state/email/' }));
+
+      const callOptions = runSpy.mock.calls[0][0];
+      const claudeVolume = callOptions.volumes.find(
+        (v: { target: string }) => v.target === '/.claude',
+      );
+      expect(claudeVolume).toBeDefined();
+      expect(claudeVolume!.source).toBe('/data/claude-state/email/');
+      expect(claudeVolume!.readonly).toBe(false);
+    });
+
+    it('does not mount .claude volume when claudeStatePath is not provided', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(defaultSpawnRequest());
+
+      const callOptions = runSpy.mock.calls[0][0];
+      const claudeVolume = callOptions.volumes.find(
+        (v: { target: string }) => v.target === '/.claude',
+      );
+      expect(claudeVolume).toBeUndefined();
+    });
+
+    it('isolates .claude state per group', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(
+        defaultSpawnRequest({
+          group: 'email',
+          claudeStatePath: '/data/claude-state/email/',
+        }),
+      );
+      await manager.spawn(
+        defaultSpawnRequest({
+          group: 'slack',
+          claudeStatePath: '/data/claude-state/slack/',
+        }),
+      );
+
+      const emailOptions = runSpy.mock.calls[0][0];
+      const slackOptions = runSpy.mock.calls[1][0];
+
+      const emailVolume = emailOptions.volumes.find(
+        (v: { target: string }) => v.target === '/.claude',
+      );
+      const slackVolume = slackOptions.volumes.find(
+        (v: { target: string }) => v.target === '/.claude',
+      );
+
+      expect(emailVolume!.source).toBe('/data/claude-state/email/');
+      expect(slackVolume!.source).toBe('/data/claude-state/slack/');
+      expect(emailVolume!.source).not.toBe(slackVolume!.source);
     });
   });
 });
