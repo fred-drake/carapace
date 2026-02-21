@@ -9,6 +9,9 @@
 import { PROTOCOL_VERSION } from '../../types/protocol.js';
 import type { RequestEnvelope, ResponseEnvelope } from '../../types/protocol.js';
 import type { ToolHandler } from '../tool-catalog.js';
+import { createLogger } from '../logger.js';
+
+const logger = createLogger('pipeline:route');
 
 // ---------------------------------------------------------------------------
 // Dispatch
@@ -24,6 +27,10 @@ export async function dispatchToHandler(
   envelope: RequestEnvelope,
   handler: ToolHandler,
 ): Promise<ResponseEnvelope> {
+  logger.debug('dispatching to handler', {
+    correlation: envelope.correlation,
+    topic: envelope.topic,
+  });
   const result = await handler(envelope);
 
   const response: ResponseEnvelope = {

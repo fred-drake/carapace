@@ -24,6 +24,7 @@ import type {
   PipelineStage,
   SessionContext,
 } from './pipeline/types.js';
+import { createLogger, type Logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // MessageRouter
@@ -32,9 +33,11 @@ import type {
 export class MessageRouter {
   private readonly catalog: ToolCatalog;
   private readonly stages: PipelineStage[];
+  private readonly logger: Logger;
 
-  constructor(toolCatalog: ToolCatalog, stages?: PipelineStage[]) {
+  constructor(toolCatalog: ToolCatalog, stages?: PipelineStage[], logger?: Logger) {
     this.catalog = toolCatalog;
+    this.logger = logger ?? createLogger('router');
 
     // Stages 1-5 are synchronous; stage 6 (dispatch) is async and handled
     // separately after the synchronous pipeline completes.
@@ -56,6 +59,12 @@ export class MessageRouter {
    *   or an error response from whichever stage rejected the message.
    */
   async processRequest(wire: WireMessage, session: SessionContext): Promise<ResponseEnvelope> {
+    const reqLogger = this.logger.withContext({
+      correlation: wire.correlation,
+      topic: wire.topic,
+      group: session.group,
+    });
+
     try {
       let ctx: PipelineContext = { wire, session };
 
@@ -66,6 +75,10 @@ export class MessageRouter {
         // Check if the stage returned an error (PipelineResult with ok: false)
         if (this.isPipelineResult(result)) {
           if (!result.ok) {
+            reqLogger.info('stage rejected', {
+              trace: `stage:${stage.name}`,
+              error_code: result.error.code,
+            });
             return this.buildErrorResponse(wire, result.error);
           }
           // ok: true should not happen from stages 1-5; defensive guard
@@ -92,6 +105,10 @@ export class MessageRouter {
       // Stage 6: async handler dispatch
       const handler = this.catalog.get(ctx.tool.name)?.handler;
       if (!handler) {
+        reqLogger.info('stage rejected', {
+          trace: 'stage:route',
+          error_code: ErrorCode.PLUGIN_UNAVAILABLE,
+        });
         return this.buildErrorResponse(wire, {
           code: ErrorCode.PLUGIN_UNAVAILABLE,
           message: `Handler not found for tool: "${ctx.tool.name}"`,
@@ -99,10 +116,23 @@ export class MessageRouter {
         });
       }
 
-      return await dispatchToHandler(ctx.envelope, handler);
+      const startTime = Date.now();
+      const response = await dispatchToHandler(ctx.envelope, handler);
+      const duration_ms = Date.now() - startTime;
+      reqLogger.debug('handler dispatched', {
+        trace: 'stage:route',
+        duration_ms,
+        ok: true,
+      });
+
+      return response;
     } catch (err: unknown) {
       // Catch unexpected errors and wrap them
       const message = err instanceof Error ? err.message : String(err);
+      reqLogger.error('pipeline error', {
+        error: err instanceof Error ? err : new Error(String(err)),
+        error_code: ErrorCode.PLUGIN_ERROR,
+      });
       return this.buildErrorResponse(wire, {
         code: ErrorCode.PLUGIN_ERROR,
         message: `Unexpected error: ${message}`,
