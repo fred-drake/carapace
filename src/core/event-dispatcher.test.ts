@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventDispatcher } from './event-dispatcher.js';
 import type { EventDispatcherDeps, DispatchResult } from './event-dispatcher.js';
 import type { PluginHandler, SessionLookup } from './plugin-handler.js';
+import type { SessionPolicy } from '../types/manifest.js';
 import { createEventEnvelope } from '../testing/factories.js';
 import { configureLogging, resetLogging, type LogEntry, type LogSink } from './logger.js';
 
@@ -465,7 +466,7 @@ describe('EventDispatcher', () => {
 
       it('spawns without resume when policy is explicitly fresh', async () => {
         deps = createDeps({
-          getSessionPolicy: vi.fn(() => 'fresh'),
+          getSessionPolicy: vi.fn((): SessionPolicy => 'fresh'),
         });
         dispatcher = new EventDispatcher(deps);
 
@@ -485,7 +486,7 @@ describe('EventDispatcher', () => {
     describe('resume policy', () => {
       it('includes resume session ID in env when latest session exists', async () => {
         deps = createDeps({
-          getSessionPolicy: vi.fn(() => 'resume'),
+          getSessionPolicy: vi.fn((): SessionPolicy => 'resume'),
           getLatestSession: vi.fn(() => 'claude-sess-abc-123'),
         });
         dispatcher = new EventDispatcher(deps);
@@ -506,7 +507,7 @@ describe('EventDispatcher', () => {
 
       it('spawns fresh when no latest session is found', async () => {
         deps = createDeps({
-          getSessionPolicy: vi.fn(() => 'resume'),
+          getSessionPolicy: vi.fn((): SessionPolicy => 'resume'),
           getLatestSession: vi.fn(() => null),
         });
         dispatcher = new EventDispatcher(deps);
@@ -525,7 +526,7 @@ describe('EventDispatcher', () => {
 
       it('merges resume session ID with task prompt env', async () => {
         deps = createDeps({
-          getSessionPolicy: vi.fn(() => 'resume'),
+          getSessionPolicy: vi.fn((): SessionPolicy => 'resume'),
           getLatestSession: vi.fn(() => 'claude-sess-xyz'),
         });
         dispatcher = new EventDispatcher(deps);
@@ -555,7 +556,7 @@ describe('EventDispatcher', () => {
         };
 
         deps = createDeps({
-          getSessionPolicy: vi.fn(() => 'explicit'),
+          getSessionPolicy: vi.fn((): SessionPolicy => 'explicit'),
           getPluginHandler: vi.fn(() => handler),
           createSessionLookup: vi.fn(() => mockLookup),
         });
@@ -580,7 +581,7 @@ describe('EventDispatcher', () => {
         const handler = createMockHandler({ resolveSession });
 
         deps = createDeps({
-          getSessionPolicy: vi.fn(() => 'explicit'),
+          getSessionPolicy: vi.fn((): SessionPolicy => 'explicit'),
           getPluginHandler: vi.fn(() => handler),
           createSessionLookup: vi.fn(() => ({
             latest: async () => null,
@@ -604,7 +605,7 @@ describe('EventDispatcher', () => {
         const handler = createMockHandler(); // no resolveSession
 
         deps = createDeps({
-          getSessionPolicy: vi.fn(() => 'explicit'),
+          getSessionPolicy: vi.fn((): SessionPolicy => 'explicit'),
           getPluginHandler: vi.fn(() => handler),
           createSessionLookup: vi.fn(() => ({
             latest: async () => null,
@@ -626,7 +627,7 @@ describe('EventDispatcher', () => {
 
       it('falls back to fresh when no handler is found for group', async () => {
         deps = createDeps({
-          getSessionPolicy: vi.fn(() => 'explicit'),
+          getSessionPolicy: vi.fn((): SessionPolicy => 'explicit'),
           getPluginHandler: vi.fn(() => undefined),
           createSessionLookup: vi.fn(() => ({
             latest: async () => null,
@@ -653,7 +654,7 @@ describe('EventDispatcher', () => {
         const handler = createMockHandler({ resolveSession });
 
         deps = createDeps({
-          getSessionPolicy: vi.fn(() => 'explicit'),
+          getSessionPolicy: vi.fn((): SessionPolicy => 'explicit'),
           getPluginHandler: vi.fn(() => handler),
           createSessionLookup: vi.fn(() => ({
             latest: async () => null,
@@ -681,7 +682,7 @@ describe('EventDispatcher', () => {
         const handler = createMockHandler({ resolveSession });
 
         deps = createDeps({
-          getSessionPolicy: vi.fn(() => 'explicit'),
+          getSessionPolicy: vi.fn((): SessionPolicy => 'explicit'),
           getPluginHandler: vi.fn(() => handler),
           createSessionLookup: vi.fn(() => ({
             latest: async () => null,
@@ -708,7 +709,7 @@ describe('EventDispatcher', () => {
     describe('security — never trust wire session IDs', () => {
       it('ignores session_id field in event payload', async () => {
         deps = createDeps({
-          getSessionPolicy: vi.fn(() => 'fresh'),
+          getSessionPolicy: vi.fn((): SessionPolicy => 'fresh'),
         });
         dispatcher = new EventDispatcher(deps);
 
@@ -826,7 +827,7 @@ describe('EventDispatcher', () => {
 
     it('logs session policy resolution', async () => {
       deps = createDeps({
-        getSessionPolicy: vi.fn(() => 'resume'),
+        getSessionPolicy: vi.fn((): SessionPolicy => 'resume'),
         getLatestSession: vi.fn(() => 'claude-sess-abc'),
       });
       dispatcher = new EventDispatcher(deps);
