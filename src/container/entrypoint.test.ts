@@ -158,4 +158,85 @@ describe('entrypoint.sh', () => {
     expect(args).toContain('-p');
     expect(args).toContain('Do the thing');
   });
+
+  // -------------------------------------------------------------------------
+  // --output-format stream-json and --verbose tests
+  // -------------------------------------------------------------------------
+
+  it('adds --output-format stream-json and --verbose with task prompt', async () => {
+    const result = await runEntrypointWithStdin('\n', [], {
+      CARAPACE_TASK_PROMPT: 'Summarize my emails',
+    });
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).toContain('--output-format stream-json');
+    expect(args).toContain('--verbose');
+  });
+
+  it('does not add --output-format or --verbose in interactive mode', async () => {
+    const result = await runEntrypointWithStdin('\n');
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).not.toContain('--output-format');
+    expect(args).not.toContain('--verbose');
+  });
+
+  // -------------------------------------------------------------------------
+  // CARAPACE_RESUME_SESSION tests
+  // -------------------------------------------------------------------------
+
+  it('adds --resume with task prompt and resume session', async () => {
+    const result = await runEntrypointWithStdin('\n', [], {
+      CARAPACE_TASK_PROMPT: 'Continue work',
+      CARAPACE_RESUME_SESSION: 'session-abc-123',
+    });
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).toContain('-p');
+    expect(args).toContain('Continue work');
+    expect(args).toContain('--output-format stream-json');
+    expect(args).toContain('--verbose');
+    expect(args).toContain('--resume session-abc-123');
+  });
+
+  it('adds --resume without task prompt (interactive resume)', async () => {
+    const result = await runEntrypointWithStdin('\n', [], {
+      CARAPACE_RESUME_SESSION: 'session-abc-123',
+    });
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).toContain('--dangerously-skip-permissions');
+    expect(args).toContain('--resume session-abc-123');
+    // Interactive mode: no -p, no --output-format, no --verbose
+    expect(args).not.toMatch(/\s-p\s|^-p\s|\s-p$/);
+    expect(args).not.toContain('--output-format');
+    expect(args).not.toContain('--verbose');
+  });
+
+  it('does not add --resume when CARAPACE_RESUME_SESSION is empty', async () => {
+    const result = await runEntrypointWithStdin('\n', [], {
+      CARAPACE_TASK_PROMPT: 'Do something',
+      CARAPACE_RESUME_SESSION: '',
+    });
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).not.toContain('--resume');
+  });
+
+  it('does not add --resume when CARAPACE_RESUME_SESSION is unset', async () => {
+    const result = await runEntrypointWithStdin('\n', [], {
+      CARAPACE_TASK_PROMPT: 'Do something',
+    });
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).not.toContain('--resume');
+  });
+
+  it('injects credentials with resume session and task prompt together', async () => {
+    const result = await runEntrypointWithStdin('ANTHROPIC_API_KEY=sk-ant-test\n\n', [], {
+      CARAPACE_TASK_PROMPT: 'Resume the work',
+      CARAPACE_RESUME_SESSION: 'session-xyz',
+    });
+    expect(result.stdout).toContain('ANTHROPIC_API_KEY=sk-ant-test');
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).toContain('-p');
+    expect(args).toContain('Resume the work');
+    expect(args).toContain('--resume session-xyz');
+    expect(args).toContain('--output-format stream-json');
+    expect(args).toContain('--verbose');
+  });
 });

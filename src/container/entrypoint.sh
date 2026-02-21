@@ -39,8 +39,20 @@ exec < /dev/null
 
 if [ -n "${CARAPACE_TASK_PROMPT:-}" ]; then
   # Task-triggered session: run prompt in non-interactive mode (-p)
-  exec claude --dangerously-skip-permissions -p "$CARAPACE_TASK_PROMPT" "$@"
+  # Always add --output-format stream-json and --verbose for non-interactive
+  set -- --dangerously-skip-permissions -p "$CARAPACE_TASK_PROMPT" \
+    --output-format stream-json --verbose
+
+  if [ -n "${CARAPACE_RESUME_SESSION:-}" ]; then
+    set -- "$@" --resume "$CARAPACE_RESUME_SESSION"
+  fi
+
+  exec claude "$@"
 else
   # Interactive session (no task prompt)
-  exec claude --dangerously-skip-permissions "$@"
+  if [ -n "${CARAPACE_RESUME_SESSION:-}" ]; then
+    exec claude --dangerously-skip-permissions --resume "$CARAPACE_RESUME_SESSION" "$@"
+  else
+    exec claude --dangerously-skip-permissions "$@"
+  fi
 fi
