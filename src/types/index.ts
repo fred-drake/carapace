@@ -32,6 +32,7 @@ export {
 
 export {
   type RiskLevel,
+  type SessionPolicy,
   type Author,
   type JsonSchemaProperty,
   type JsonSchema,
