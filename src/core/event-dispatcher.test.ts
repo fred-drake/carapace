@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventDispatcher } from './event-dispatcher.js';
 import type { EventDispatcherDeps, DispatchResult } from './event-dispatcher.js';
 import { createEventEnvelope } from '../testing/factories.js';
+import { configureLogging, resetLogging, type LogEntry, type LogSink } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -425,6 +426,98 @@ describe('EventDispatcher', () => {
       if (result.action === 'error') {
         expect(result.reason).toContain('Container runtime unavailable');
       }
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Logging
+  // -----------------------------------------------------------------------
+
+  describe('logging', () => {
+    let logEntries: LogEntry[];
+
+    beforeEach(() => {
+      logEntries = [];
+      const logSink: LogSink = (entry) => logEntries.push(entry);
+      configureLogging({ level: 'debug', sink: logSink });
+    });
+
+    afterEach(() => {
+      resetLogging();
+    });
+
+    it('logs agent spawned on successful dispatch', async () => {
+      deps = createDeps();
+      dispatcher = new EventDispatcher(deps);
+
+      const envelope = createEventEnvelope({
+        topic: 'message.inbound',
+        group: 'email',
+        payload: VALID_INBOUND_PAYLOAD,
+      });
+      await dispatcher.dispatch(envelope);
+
+      const spawnLog = logEntries.find((e) => e.msg === 'agent spawned');
+      expect(spawnLog).toBeDefined();
+      expect(spawnLog!.group).toBe('email');
+      expect(spawnLog!.session).toBe('session-123');
+    });
+
+    it('logs event rejected on session limit', async () => {
+      deps = createDeps({
+        getActiveSessionCount: vi.fn(() => 3),
+        maxSessionsPerGroup: 3,
+      });
+      dispatcher = new EventDispatcher(deps);
+
+      const envelope = createEventEnvelope({
+        topic: 'message.inbound',
+        group: 'email',
+        payload: VALID_INBOUND_PAYLOAD,
+      });
+      await dispatcher.dispatch(envelope);
+
+      const rejectLog = logEntries.find(
+        (e) => e.msg === 'event rejected' && e.meta?.reason === 'session limit',
+      );
+      expect(rejectLog).toBeDefined();
+      expect(rejectLog!.group).toBe('email');
+    });
+
+    it('logs spawn failure at error level', async () => {
+      deps = createDeps({
+        spawnAgent: vi.fn(async () => {
+          throw new Error('Runtime crashed');
+        }),
+      });
+      dispatcher = new EventDispatcher(deps);
+
+      const envelope = createEventEnvelope({
+        topic: 'message.inbound',
+        group: 'email',
+        payload: VALID_INBOUND_PAYLOAD,
+      });
+      await dispatcher.dispatch(envelope);
+
+      const errLog = logEntries.find((e) => e.msg === 'spawn failed');
+      expect(errLog).toBeDefined();
+      expect(errLog!.level).toBe('error');
+      expect(errLog!.group).toBe('email');
+    });
+
+    it('logs dispatch received for every event', async () => {
+      deps = createDeps();
+      dispatcher = new EventDispatcher(deps);
+
+      const envelope = createEventEnvelope({
+        topic: 'agent.started',
+        group: 'email',
+      });
+      await dispatcher.dispatch(envelope);
+
+      const recvLog = logEntries.find((e) => e.msg === 'dispatch received');
+      expect(recvLog).toBeDefined();
+      expect(recvLog!.topic).toBe('agent.started');
     });
   });
 });

@@ -14,6 +14,7 @@
 import type { EventEnvelope } from '../types/protocol.js';
 import { validateMessageInbound } from './event-schemas.js';
 import type { AuditEntry } from './audit-log.js';
+import { createLogger, type Logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,6 +37,8 @@ export interface EventDispatcherDeps {
   configuredGroups: ReadonlySet<string>;
   /** Optional audit log for recording rejected events. */
   auditLog?: AuditLogSink;
+  /** Optional logger for structured logging. */
+  logger?: Logger;
 }
 
 /** Discriminated union of dispatch outcomes. */
@@ -57,9 +60,11 @@ const SPAWN_TOPICS = new Set(['message.inbound', 'task.triggered']);
 
 export class EventDispatcher {
   private readonly deps: EventDispatcherDeps;
+  private readonly logger: Logger;
 
   constructor(deps: EventDispatcherDeps) {
     this.deps = deps;
+    this.logger = deps.logger ?? createLogger('event-dispatcher');
   }
 
   /**
@@ -70,18 +75,23 @@ export class EventDispatcher {
   async dispatch(envelope: EventEnvelope): Promise<DispatchResult> {
     const { topic, group } = envelope;
 
+    this.logger.debug('dispatch received', { topic, group });
+
     // Empty group — cannot route
     if (!group || group.length === 0) {
+      this.logger.debug('event dropped', { topic, reason: 'empty group' });
       return { action: 'dropped', reason: 'Empty group field', topic };
     }
 
     // Non-spawn topics are logged and dropped
     if (!SPAWN_TOPICS.has(topic)) {
+      this.logger.debug('event dropped', { topic, reason: 'non-spawn topic' });
       return { action: 'dropped', reason: `No spawn action for topic "${topic}"`, topic };
     }
 
     // message.inbound requires a configured group
     if (topic === 'message.inbound' && !this.deps.configuredGroups.has(group)) {
+      this.logger.debug('event dropped', { topic, group, reason: 'unconfigured group' });
       return {
         action: 'dropped',
         reason: `Group "${group}" is not configured for message.inbound events`,
@@ -94,6 +104,7 @@ export class EventDispatcher {
       const validation = validateMessageInbound(envelope.payload as Record<string, unknown>);
       if (!validation.valid) {
         const reason = `Payload validation failed: ${validation.errors.join('; ')}`;
+        this.logger.info('event rejected', { topic, group, reason: 'payload validation' });
         this.auditReject(envelope, reason);
         return { action: 'rejected', reason, group };
       }
@@ -102,6 +113,13 @@ export class EventDispatcher {
     // Concurrent session limit check
     const activeCount = this.deps.getActiveSessionCount(group);
     if (activeCount >= this.deps.maxSessionsPerGroup) {
+      this.logger.info('event rejected', {
+        topic,
+        group,
+        reason: 'session limit',
+        active: activeCount,
+        max: this.deps.maxSessionsPerGroup,
+      });
       return {
         action: 'rejected',
         reason:
@@ -117,9 +135,15 @@ export class EventDispatcher {
     // Spawn the agent
     try {
       const sessionId = await this.deps.spawnAgent(group, env);
+      this.logger.info('agent spawned', { topic, group, session: sessionId });
       return { action: 'spawned', sessionId, group };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+      this.logger.error('spawn failed', {
+        topic,
+        group,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
       return { action: 'error', reason: message, group };
     }
   }

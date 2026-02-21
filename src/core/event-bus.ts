@@ -14,6 +14,7 @@
 
 import type { PublisherSocket, SubscriberSocket, SocketFactory } from '../types/socket.js';
 import type { Envelope, EventEnvelope } from '../types/protocol.js';
+import { createLogger, type Logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // SubscriptionHandle
@@ -37,11 +38,13 @@ export interface SubscriptionHandle {
 
 export class EventBus {
   private readonly socketFactory: SocketFactory;
+  private readonly logger: Logger;
   private publisher: PublisherSocket | null = null;
   private readonly subscriptions: Set<SubscriberSocket> = new Set();
 
-  constructor(socketFactory: SocketFactory) {
+  constructor(socketFactory: SocketFactory, logger?: Logger) {
     this.socketFactory = socketFactory;
+    this.logger = logger ?? createLogger('event-bus');
   }
 
   // -------------------------------------------------------------------------
@@ -60,6 +63,7 @@ export class EventBus {
     }
     this.publisher = this.socketFactory.createPublisher();
     await this.publisher.bind(address);
+    this.logger.info('PUB socket bound', { address });
   }
 
   /**
@@ -79,6 +83,7 @@ export class EventBus {
     const payloadBuffer = Buffer.from(JSON.stringify(envelope), 'utf-8');
 
     await this.publisher.send(topicBuffer, payloadBuffer);
+    this.logger.debug('event published', { topic: envelope.topic, group: envelope.group });
   }
 
   // -------------------------------------------------------------------------
@@ -104,6 +109,7 @@ export class EventBus {
     }
 
     this.subscriptions.add(socket);
+    this.logger.info('SUB socket connected', { address, topics });
 
     const handle: SubscriptionHandle = {
       onMessage(handler: (envelope: Envelope) => void): void {
@@ -142,5 +148,6 @@ export class EventBus {
     this.subscriptions.clear();
 
     await Promise.all(closeTasks);
+    this.logger.info('event bus closed');
   }
 }
