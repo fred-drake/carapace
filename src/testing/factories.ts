@@ -16,6 +16,7 @@ import type {
   ErrorPayload,
 } from '../types/index.js';
 import { ErrorCode } from '../types/index.js';
+import type { LogEntry, LogLevel } from '../core/logger.js';
 
 // ---------------------------------------------------------------------------
 // DeepPartial helper
@@ -202,4 +203,71 @@ export function createErrorPayload(overrides?: DeepPartial<ErrorPayload>): Error
     retriable: false,
   };
   return overrides ? deepMerge(defaults, overrides) : { ...defaults };
+}
+
+// ---------------------------------------------------------------------------
+// Log entry assertion helper
+// ---------------------------------------------------------------------------
+
+const VALID_LOG_LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error'];
+
+/**
+ * Assert that a log entry has the correct structure and optionally matches
+ * expected field values.
+ *
+ * @param entry - The log entry to validate.
+ * @param expected - Optional expected values for specific fields.
+ * @throws If the entry is missing required fields or has invalid values.
+ */
+export function assertValidLogEntry(
+  entry: LogEntry,
+  expected?: {
+    component?: string;
+    level?: LogLevel;
+    msg?: string;
+    correlation?: string;
+    topic?: string;
+    group?: string;
+  },
+): void {
+  // Required fields
+  if (!entry.level || !VALID_LOG_LEVELS.includes(entry.level)) {
+    throw new Error(`Invalid log level: ${entry.level}`);
+  }
+  if (!entry.ts) {
+    throw new Error('Missing ts field');
+  }
+  // Validate ISO 8601
+  const parsed = new Date(entry.ts);
+  if (isNaN(parsed.getTime()) || parsed.toISOString() !== entry.ts) {
+    throw new Error(`Invalid ISO 8601 timestamp: ${entry.ts}`);
+  }
+  if (!entry.component) {
+    throw new Error('Missing component field');
+  }
+  if (!entry.msg && entry.msg !== '') {
+    throw new Error('Missing msg field');
+  }
+
+  // Optional expected matches
+  if (expected) {
+    if (expected.component !== undefined && entry.component !== expected.component) {
+      throw new Error(`Expected component "${expected.component}", got "${entry.component}"`);
+    }
+    if (expected.level !== undefined && entry.level !== expected.level) {
+      throw new Error(`Expected level "${expected.level}", got "${entry.level}"`);
+    }
+    if (expected.msg !== undefined && entry.msg !== expected.msg) {
+      throw new Error(`Expected msg "${expected.msg}", got "${entry.msg}"`);
+    }
+    if (expected.correlation !== undefined && entry.correlation !== expected.correlation) {
+      throw new Error(`Expected correlation "${expected.correlation}", got "${entry.correlation}"`);
+    }
+    if (expected.topic !== undefined && entry.topic !== expected.topic) {
+      throw new Error(`Expected topic "${expected.topic}", got "${entry.topic}"`);
+    }
+    if (expected.group !== undefined && entry.group !== expected.group) {
+      throw new Error(`Expected group "${expected.group}", got "${entry.group}"`);
+    }
+  }
 }
