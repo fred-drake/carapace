@@ -21,11 +21,16 @@ This provides: Node.js 22, pnpm, TypeScript, Docker/Docker Compose, ZeroMQ, SQLi
 ```bash
 pnpm install          # install dependencies
 pnpm run build        # compile TypeScript
+pnpm run type-check   # full type-check (includes test files — this is the CI gate)
 pnpm run lint         # oxlint
 pnpm run format       # prettier
 pnpm test             # run full test suite
 pnpm test -- <path>   # run a single test file
 ```
+
+**Important**: `pnpm run build` only type-checks source files (`tsconfig.json`).
+CI runs `pnpm run type-check` which uses `tsconfig.check.json` and includes test
+files. Always run `type-check` before pushing to catch test file type errors.
 
 ## Architecture
 
@@ -112,6 +117,42 @@ The runtime is detected once in `main()` and passed into both the CLI deps
   Docker/Podman. Images built with `container build` only exist in the
   Apple Container image store.
 
+## TypeScript Patterns
+
+### Vitest mock typing for discriminated unions
+
+`vi.fn(() => 'fresh')` infers `Mock<() => string>`, which won't satisfy union types
+like `SessionPolicy = 'fresh' | 'resume' | 'explicit'`. Always add explicit return
+type annotations:
+
+```typescript
+// BAD — infers string, fails type-check
+getSessionPolicy: vi.fn(() => 'fresh'),
+
+// GOOD — explicit return type
+getSessionPolicy: vi.fn((): SessionPolicy => 'fresh'),
+```
+
+Same issue with object literals in discriminated unions — `{ ok: true }` infers
+`{ ok: boolean }`. Use `as const`:
+
+```typescript
+handleToolInvocation: async () => ({ ok: true as const, result: {} }),
+```
+
+### Ajv ESM interop
+
+Ajv's CJS/ESM interop requires a runtime fallback. Use the pattern from
+`plugin-loader.ts`:
+
+```typescript
+import _Ajv from 'ajv';
+const Ajv = _Ajv.default ?? _Ajv;
+```
+
+Do **not** use typed casts like `(_Ajv as unknown as { default: typeof _Ajv }).default`
+— this breaks under `tsconfig.check.json`.
+
 ## Known Issues
 
 - **Path aliases need runtime resolver**: `tsconfig.json` path aliases (`@carapace/core/*`, etc.) only work at type-check time. `tsc` with `NodeNext` does not rewrite imports in emitted JS. Add `tsc-alias` or equivalent to the build pipeline before code starts using aliases.
@@ -163,6 +204,12 @@ Code review findings go in `TASK.md` (root) with priority-tagged actionable item
 Six specialized roles for task generation and architectural review. Re-create with: `TeamCreate` named `carapace-planning`, then spawn each role as a teammate with `team_name: "carapace-planning"`. Each role has a persistent instruction file in `docs/team-roles/`.
 
 **Nix environment caveat**: If `flake.nix` is modified during a session, any running AI team agents must be shut down and re-spawned so they pick up the new dev shell environment. The Nix flake is evaluated when an agent starts; changes are not reflected in already-running agents.
+
+**Git worktree caveat**: When agents work in isolated worktrees, they may merge
+dependency branches that introduce stale or conflicting code. Always verify the
+diff against master contains only the intended file changes before creating a PR.
+If contamination is found, create a clean branch from master and cherry-pick or
+manually apply only the target changes.
 
 | Role              | Name          | Focus                                                                                              |
 | ----------------- | ------------- | -------------------------------------------------------------------------------------------------- |
