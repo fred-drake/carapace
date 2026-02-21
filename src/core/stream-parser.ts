@@ -37,7 +37,7 @@ export interface ParsedEvent {
 // ---------------------------------------------------------------------------
 
 /** Maximum line size in bytes before rejecting. */
-const MAX_LINE_BYTES = 1024 * 1024; // 1 MB
+const MAX_LINE_BYTES = 1_048_576; // 1 MB
 
 // ---------------------------------------------------------------------------
 // StreamParser
@@ -46,18 +46,18 @@ const MAX_LINE_BYTES = 1024 * 1024; // 1 MB
 export class StreamParser {
   private seq = 0;
 
-  /** Parse a single NDJSON line. Returns null for unknown/skipped types. */
-  parse(line: string): ParsedEvent | null {
+  /** Parse a single NDJSON line. Returns null for empty/whitespace/unknown types. */
+  parseLine(line: string): ParsedEvent | null {
     const trimmed = line.trim();
 
-    // Empty / whitespace-only → error
+    // Empty / whitespace-only → null (skip silently)
     if (trimmed.length === 0) {
-      return this.errorEvent('Malformed JSON: empty line');
+      return null;
     }
 
-    // Size limit check (byte length)
-    if (Buffer.byteLength(trimmed, 'utf-8') > MAX_LINE_BYTES) {
-      return this.errorEvent('Line exceeds size limit (1 MB)');
+    // Size limit check (byte length on original line)
+    if (Buffer.byteLength(line, 'utf-8') > MAX_LINE_BYTES) {
+      return this.errorEvent('Line exceeds 1MB size limit');
     }
 
     // JSON parse
@@ -80,7 +80,7 @@ export class StreamParser {
       case 'result':
         return this.parseResult(obj);
       default:
-        // Unknown types (including stream_event) → null, no seq increment
+        console.warn(`StreamParser: unknown stream-json type "${type}"`);
         return null;
     }
   }
@@ -103,10 +103,16 @@ export class StreamParser {
 
   private parseAssistant(obj: Record<string, unknown>): ParsedEvent | null {
     const message = obj.message as Record<string, unknown> | undefined;
-    if (!message) return null;
+    if (!message) {
+      console.warn('StreamParser: assistant event missing message field');
+      return null;
+    }
 
     const content = message.content as Array<Record<string, unknown>> | undefined;
-    if (!Array.isArray(content) || content.length === 0) return null;
+    if (!Array.isArray(content) || content.length === 0) {
+      console.warn('StreamParser: assistant event has empty content');
+      return null;
+    }
 
     // Check for tool_use first (takes precedence over text)
     const toolUse = content.find((block) => block.type === 'tool_use');
