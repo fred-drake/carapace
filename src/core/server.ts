@@ -244,7 +244,17 @@ export class Server {
       ]);
 
       this.eventSubscription.onMessage((envelope) => {
-        void dispatcher.dispatch(envelope as EventEnvelope);
+        void dispatcher.dispatch(envelope as EventEnvelope).then((result) => {
+          if (result.action === 'error') {
+            this.output(`Event dispatch error (${result.group}): ${result.reason}`);
+          } else if (result.action === 'rejected') {
+            this.output(`Event rejected (${result.group}): ${result.reason}`);
+          } else if (result.action === 'dropped') {
+            this.output(`Event dropped (${result.topic}): ${result.reason}`);
+          } else if (result.action === 'spawned') {
+            this.output(`Agent spawned for group "${result.group}" (session ${result.sessionId})`);
+          }
+        });
       });
     }
 
@@ -430,7 +440,18 @@ export class Server {
       try {
         const content = fs.readFileSync(filePath, 'utf-8');
         const envelope = JSON.parse(content) as EventEnvelope;
-        void dispatcher.dispatch(envelope);
+        this.output(`Processing prompt file: ${entry}`);
+        void dispatcher.dispatch(envelope).then((result) => {
+          if (result.action === 'error') {
+            this.output(`Prompt dispatch error (${result.group}): ${result.reason}`);
+          } else if (result.action === 'rejected') {
+            this.output(`Prompt rejected (${result.group}): ${result.reason}`);
+          } else if (result.action === 'spawned') {
+            this.output(
+              `Agent spawned for prompt (group "${result.group}", session ${result.sessionId})`,
+            );
+          }
+        });
         fs.unlinkSync(filePath);
       } catch {
         // Malformed file or read error — remove and continue

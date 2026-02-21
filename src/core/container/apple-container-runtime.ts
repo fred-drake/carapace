@@ -6,10 +6,10 @@
  * and the API surface may evolve with macOS updates.
  *
  * Key differences from Docker/Podman:
- * - **vsock for socket sharing**: Uses `--publish-socket` to expose host
- *   sockets via virtio socket (vsock). This bypasses the network stack
- *   entirely — superior latency and isolation compared to bind-mounted
- *   Unix sockets used by Docker and Podman.
+ * - **Bind-mount for socket sharing**: Uses `-v` bind mounts for host
+ *   sockets (same as Docker/Podman). `--publish-socket` publishes
+ *   container sockets TO the host (opposite direction) and is not
+ *   suitable for making existing host sockets accessible to containers.
  * - **Read-only filesystem is the default**: No `--read-only` flag needed.
  *   Writable mounts must be explicitly declared.
  * - **VM-per-container isolation**: Each container runs in its own
@@ -17,7 +17,7 @@
  * - **No SELinux relabeling**: macOS doesn't use SELinux, so no `:Z` suffix.
  */
 
-import { execFile as execFileCb } from 'node:child_process';
+import { execFile as execFileCb, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import type {
   ContainerRuntime,
@@ -38,6 +38,15 @@ export type ExecFn = (
   args: readonly string[],
 ) => Promise<{ stdout: string; stderr: string }>;
 
+/**
+ * Spawn function type for running a process with stdin data piped.
+ *
+ * Used by `container start -ai` to pipe credentials to the container's stdin.
+ * The spawn function should write stdinData to the child process's stdin
+ * and detach without waiting for the process to exit.
+ */
+export type SpawnFn = (file: string, args: readonly string[], stdinData: string) => void;
+
 // ---------------------------------------------------------------------------
 // Options
 // ---------------------------------------------------------------------------
@@ -47,6 +56,8 @@ export interface AppleContainerRuntimeOptions {
   exec?: ExecFn;
   /** Path to the container binary. Defaults to `'container'`. */
   containerPath?: string;
+  /** Injectable spawn function for stdin piping. Defaults to child_process.spawn. */
+  spawn?: SpawnFn;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,10 +102,12 @@ export class AppleContainerRuntime implements ContainerRuntime {
 
   private readonly exec: ExecFn;
   private readonly containerPath: string;
+  private readonly spawnFn: SpawnFn;
 
   constructor(options?: AppleContainerRuntimeOptions) {
     this.exec = options?.exec ?? defaultExec;
     this.containerPath = options?.containerPath ?? 'container';
+    this.spawnFn = options?.spawn ?? defaultSpawn;
   }
 
   // -----------------------------------------------------------------------
@@ -177,6 +190,19 @@ export class AppleContainerRuntime implements ContainerRuntime {
 
   async run(options: ContainerRunOptions): Promise<ContainerHandle> {
     const name = options.name ?? `carapace-${Date.now()}`;
+
+    if (options.stdinData !== undefined) {
+      // Two-step create + start for stdin piping (credential injection)
+      const createArgs = this.buildCreateArgs(options, name);
+      const { stdout } = await this.container(...createArgs);
+      const id = stdout.trim();
+
+      // Start container with stdin attached; pipe credentials
+      this.spawnFn(this.containerPath, ['start', '-ai', id], options.stdinData);
+
+      return { id, name, runtime: this.name };
+    }
+
     const args = this.buildRunArgs(options, name);
     const { stdout } = await this.container(...args);
     const id = stdout.trim();
@@ -228,12 +254,28 @@ export class AppleContainerRuntime implements ContainerRuntime {
   // Internals
   // -----------------------------------------------------------------------
 
+  /**
+   * Build args for `container create -i` (stdin piping via start -ai).
+   * Same flags as buildRunArgs but uses `create -i` instead of `run -d`.
+   */
+  private buildCreateArgs(options: ContainerRunOptions, name: string): string[] {
+    const args: string[] = ['create', '-i', '--name', name];
+    this.appendCommonArgs(args, options);
+    return args;
+  }
+
   private buildRunArgs(options: ContainerRunOptions, name: string): string[] {
     const args: string[] = ['run', '-d', '--name', name];
+    this.appendCommonArgs(args, options);
+    return args;
+  }
 
-    // Apple Containers: read-only filesystem is the default.
-    // No --read-only flag needed — the runtime enforces it natively.
-    // Writable mounts are declared explicitly via -v without :ro.
+  /** Append network, volumes, socket mounts, env, user, and image args. */
+  private appendCommonArgs(args: string[], options: ContainerRunOptions): void {
+    // Apple Containers: --read-only flag supported
+    if (options.readOnly) {
+      args.push('--read-only');
+    }
 
     if (options.network) {
       args.push('--network', options.network);
@@ -246,12 +288,9 @@ export class AppleContainerRuntime implements ContainerRuntime {
       args.push('-v', `${vol.source}:${vol.target}${suffix}`);
     }
 
-    // Apple Containers: --publish-socket for vsock transport.
-    // This bypasses the network stack entirely — the host socket is
-    // forwarded into the VM via virtio socket, giving lower latency
-    // and stronger isolation than Docker's bind-mount approach.
+    // Bind-mount host sockets into the container via -v.
     for (const sock of options.socketMounts) {
-      args.push('--publish-socket', `${sock.hostPath}:${sock.containerPath}`);
+      args.push('-v', `${sock.hostPath}:${sock.containerPath}`);
     }
 
     for (const [key, value] of Object.entries(options.env)) {
@@ -269,8 +308,6 @@ export class AppleContainerRuntime implements ContainerRuntime {
     } else {
       args.push(options.image);
     }
-
-    return args;
   }
 
   private async container(...args: string[]): Promise<{ stdout: string; stderr: string }> {
@@ -291,4 +328,18 @@ const defaultExec: ExecFn = async (file, args) => {
     stdout: typeof result.stdout === 'string' ? result.stdout : result.stdout.toString(),
     stderr: typeof result.stderr === 'string' ? result.stderr : result.stderr.toString(),
   };
+};
+
+// ---------------------------------------------------------------------------
+// Default spawn (wraps child_process.spawn for stdin piping)
+// ---------------------------------------------------------------------------
+
+const defaultSpawn: SpawnFn = (file, args, stdinData) => {
+  const child = spawn(file, [...args], {
+    stdio: ['pipe', 'ignore', 'ignore'],
+    detached: true,
+  });
+  child.stdin!.write(stdinData);
+  child.stdin!.end();
+  child.unref();
 };
