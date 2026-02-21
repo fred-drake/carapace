@@ -17,6 +17,7 @@ import type {
   ContainerState,
 } from './runtime.js';
 import type { SessionManager, Session } from '../session-manager.js';
+import { createLogger, type Logger } from '../logger.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,6 +33,8 @@ export interface LifecycleManagerOptions {
   shutdownTimeoutMs?: number;
   /** Named Docker/Podman network for allowlisted connectivity. When set, containers use this network instead of `--network none`. */
   networkName?: string;
+  /** Optional logger for structured logging. */
+  logger?: Logger;
 }
 
 /** High-level request to spawn an agent container. */
@@ -80,6 +83,7 @@ export class ContainerLifecycleManager {
   private readonly sessionManager: SessionManager;
   private readonly shutdownTimeoutMs: number;
   private readonly networkName?: string;
+  private readonly logger: Logger;
 
   /** Tracked containers indexed by session ID. */
   private readonly containers = new Map<string, ManagedContainer>();
@@ -89,6 +93,7 @@ export class ContainerLifecycleManager {
     this.sessionManager = options.sessionManager;
     this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
     this.networkName = options.networkName;
+    this.logger = options.logger ?? createLogger('lifecycle');
   }
 
   /**
@@ -100,6 +105,13 @@ export class ContainerLifecycleManager {
   async spawn(request: SpawnRequest): Promise<ManagedContainer> {
     const connectionIdentity = `carapace-${request.group}-${crypto.randomUUID()}`;
     const containerName = `carapace-${request.group}-${crypto.randomUUID().slice(0, 8)}`;
+
+    this.logger.info('spawning container', {
+      group: request.group,
+      image: request.image,
+      containerName,
+      hasStdinData: !!request.stdinData,
+    });
 
     const runOptions: ContainerRunOptions = {
       image: request.image,
@@ -129,6 +141,13 @@ export class ContainerLifecycleManager {
     const managed: ManagedContainer = { handle, session };
     this.containers.set(session.sessionId, managed);
 
+    this.logger.info('container spawned', {
+      group: request.group,
+      session: session.sessionId,
+      containerId: handle.id,
+      containerName,
+    });
+
     return managed;
   }
 
@@ -147,6 +166,12 @@ export class ContainerLifecycleManager {
       return false;
     }
 
+    this.logger.info('shutting down container', {
+      session: sessionId,
+      group: managed.session.group,
+      containerId: managed.handle.id,
+    });
+
     // Remove from tracking immediately to prevent concurrent shutdown races
     this.containers.delete(sessionId);
 
@@ -154,6 +179,10 @@ export class ContainerLifecycleManager {
       await this.stopWithTimeout(managed.handle);
     } catch {
       // Force kill if graceful stop failed or timed out
+      this.logger.warn('graceful stop failed, force killing', {
+        session: sessionId,
+        containerId: managed.handle.id,
+      });
       try {
         await this.runtime.kill(managed.handle);
       } catch {
@@ -171,12 +200,18 @@ export class ContainerLifecycleManager {
     // Always remove the session
     this.sessionManager.delete(sessionId);
 
+    this.logger.info('container shut down', {
+      session: sessionId,
+      group: managed.session.group,
+    });
+
     return true;
   }
 
   /** Shut down all managed containers. */
   async shutdownAll(): Promise<void> {
     const sessionIds = [...this.containers.keys()];
+    this.logger.info('shutting down all containers', { count: sessionIds.length });
     await Promise.all(sessionIds.map((id) => this.shutdown(id)));
   }
 
@@ -192,6 +227,7 @@ export class ContainerLifecycleManager {
    * @returns The handles of containers that were successfully cleaned up.
    */
   async cleanupOrphans(orphanHandles: ContainerHandle[]): Promise<ContainerHandle[]> {
+    this.logger.info('cleaning up orphans', { count: orphanHandles.length });
     const cleaned: ContainerHandle[] = [];
 
     for (const handle of orphanHandles) {
@@ -199,16 +235,18 @@ export class ContainerLifecycleManager {
         const state = await this.runtime.inspect(handle);
 
         if (state.status === 'running' || state.status === 'starting') {
+          this.logger.debug('killing orphan', { containerId: handle.id, status: state.status });
           await this.runtime.kill(handle);
         }
 
         await this.runtime.remove(handle);
         cleaned.push(handle);
       } catch {
-        // Container no longer exists — skip
+        this.logger.debug('orphan not found', { containerId: handle.id });
       }
     }
 
+    this.logger.info('orphan cleanup complete', { cleaned: cleaned.length });
     return cleaned;
   }
 

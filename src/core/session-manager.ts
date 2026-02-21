@@ -7,6 +7,7 @@
  */
 
 import type { SessionContext } from './pipeline/types.js';
+import { createLogger, type Logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Session record
@@ -38,6 +39,8 @@ export interface CreateSessionOptions {
 // ---------------------------------------------------------------------------
 
 export class SessionManager {
+  private readonly logger: Logger;
+
   /** Sessions indexed by session ID. */
   private readonly sessions = new Map<string, Session>();
 
@@ -46,6 +49,10 @@ export class SessionManager {
 
   /** Reverse index: container ID → session ID. */
   private readonly containerIndex = new Map<string, string>();
+
+  constructor(logger?: Logger) {
+    this.logger = logger ?? createLogger('session');
+  }
 
   /**
    * Create a new session.
@@ -75,6 +82,12 @@ export class SessionManager {
     this.connectionIndex.set(options.connectionIdentity, session.sessionId);
     this.containerIndex.set(options.containerId, session.sessionId);
 
+    this.logger.info('session created', {
+      session: session.sessionId,
+      group: session.group,
+      containerId: session.containerId,
+    });
+
     return session;
   }
 
@@ -96,6 +109,11 @@ export class SessionManager {
     this.sessions.delete(sessionId);
     this.connectionIndex.delete(session.connectionIdentity);
     this.containerIndex.delete(session.containerId);
+
+    this.logger.info('session deleted', {
+      session: sessionId,
+      group: session.group,
+    });
 
     return true;
   }
@@ -145,8 +163,10 @@ export class SessionManager {
 
   /** Remove all sessions and clear all indexes. */
   cleanup(): void {
+    const count = this.sessions.size;
     this.sessions.clear();
     this.connectionIndex.clear();
     this.containerIndex.clear();
+    this.logger.info('all sessions cleared', { count });
   }
 }

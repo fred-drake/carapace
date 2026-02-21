@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SessionManager } from './session-manager.js';
 import { MockContainerRuntime } from './container/mock-runtime.js';
 import type { ContainerRunOptions } from './container/runtime.js';
+import { configureLogging, resetLogging, type LogEntry, type LogSink } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -373,6 +374,77 @@ describe('SessionManager', () => {
 
     it('getByContainerId returns null for unknown container', () => {
       expect(manager.getByContainerId('unknown')).toBeNull();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Logging
+  // -----------------------------------------------------------------------
+
+  describe('logging', () => {
+    let logEntries: LogEntry[];
+
+    beforeEach(() => {
+      logEntries = [];
+      const logSink: LogSink = (entry) => logEntries.push(entry);
+      configureLogging({ level: 'debug', sink: logSink });
+    });
+
+    afterEach(() => {
+      resetLogging();
+    });
+
+    it('logs session created with group and container ID', async () => {
+      const container = await runtime.run(defaultRunOptions());
+
+      manager.create({
+        containerId: container.id,
+        group: 'email',
+        connectionIdentity: `identity-${container.id}`,
+      });
+
+      const createLog = logEntries.find((e) => e.msg === 'session created');
+      expect(createLog).toBeDefined();
+      expect(createLog!.group).toBe('email');
+      expect(createLog!.meta?.containerId).toBe(container.id);
+    });
+
+    it('logs session deleted with session ID', async () => {
+      const container = await runtime.run(defaultRunOptions());
+
+      const session = manager.create({
+        containerId: container.id,
+        group: 'email',
+        connectionIdentity: `identity-${container.id}`,
+      });
+
+      manager.delete(session.sessionId);
+
+      const deleteLog = logEntries.find((e) => e.msg === 'session deleted');
+      expect(deleteLog).toBeDefined();
+      expect(deleteLog!.session).toBe(session.sessionId);
+    });
+
+    it('logs all sessions cleared on cleanup', async () => {
+      const c1 = await runtime.run(defaultRunOptions({ name: 'a' }));
+      const c2 = await runtime.run(defaultRunOptions({ name: 'b' }));
+
+      manager.create({
+        containerId: c1.id,
+        group: 'g1',
+        connectionIdentity: `identity-${c1.id}`,
+      });
+      manager.create({
+        containerId: c2.id,
+        group: 'g2',
+        connectionIdentity: `identity-${c2.id}`,
+      });
+
+      manager.cleanup();
+
+      const cleanupLog = logEntries.find((e) => e.msg === 'all sessions cleared');
+      expect(cleanupLog).toBeDefined();
+      expect(cleanupLog!.meta?.count).toBe(2);
     });
   });
 });

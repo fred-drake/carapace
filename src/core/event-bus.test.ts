@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { EventBus } from './event-bus.js';
+import { configureLogging, resetLogging, type LogEntry, type LogSink } from './logger.js';
 import type {
   PublisherSocket,
   SubscriberSocket,
@@ -340,6 +341,71 @@ describe('EventBus', () => {
       await bus.close();
 
       await expect(bus.publish(makeEventEnvelope())).rejects.toThrow('EventBus is not bound');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Logging
+  // -------------------------------------------------------------------------
+
+  describe('logging', () => {
+    let logEntries: LogEntry[];
+
+    beforeEach(() => {
+      logEntries = [];
+      const logSink: LogSink = (entry) => logEntries.push(entry);
+      configureLogging({ level: 'debug', sink: logSink });
+    });
+
+    afterEach(() => {
+      resetLogging();
+    });
+
+    it('logs PUB socket bind', async () => {
+      const loggedBus = new EventBus(factory);
+      await loggedBus.bind('ipc:///tmp/test-log.sock');
+
+      const bindLog = logEntries.find((e) => e.msg === 'PUB socket bound');
+      expect(bindLog).toBeDefined();
+      expect(bindLog!.component).toBe('event-bus');
+
+      await loggedBus.close();
+    });
+
+    it('logs event published with topic and group', async () => {
+      const loggedBus = new EventBus(factory);
+      await loggedBus.bind('ipc:///tmp/test-log.sock');
+
+      const envelope = makeEventEnvelope({ topic: 'message.inbound', group: 'test-group' });
+      await loggedBus.publish(envelope);
+
+      const pubLog = logEntries.find((e) => e.msg === 'event published');
+      expect(pubLog).toBeDefined();
+      expect(pubLog!.topic).toBe('message.inbound');
+      expect(pubLog!.group).toBe('test-group');
+
+      await loggedBus.close();
+    });
+
+    it('logs SUB socket connected with topics', async () => {
+      const loggedBus = new EventBus(factory);
+      await loggedBus.bind('ipc:///tmp/test-log.sock');
+
+      await loggedBus.subscribe('ipc:///tmp/test-log.sock', ['message.inbound']);
+
+      const subLog = logEntries.find((e) => e.msg === 'SUB socket connected');
+      expect(subLog).toBeDefined();
+
+      await loggedBus.close();
+    });
+
+    it('logs event bus closed', async () => {
+      const loggedBus = new EventBus(factory);
+      await loggedBus.bind('ipc:///tmp/test-log.sock');
+      await loggedBus.close();
+
+      const closeLog = logEntries.find((e) => e.msg === 'event bus closed');
+      expect(closeLog).toBeDefined();
     });
   });
 });

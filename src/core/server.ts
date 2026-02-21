@@ -181,12 +181,12 @@ export class Server {
     );
     await this.requestChannel.bind(provision.requestAddress);
 
-    this.eventBus = new EventBus(this.socketFactory);
+    this.eventBus = new EventBus(this.socketFactory, this.logger.child('event-bus'));
     await this.eventBus.bind(provision.eventAddress);
 
     // 4. Create subsystems
     this.toolCatalog = new ToolCatalog();
-    this.sessionManager = new SessionManager();
+    this.sessionManager = new SessionManager(this.logger.child('session'));
     this.responseSanitizer = new ResponseSanitizer();
 
     // 4a. Register intrinsic tools (always available, not filesystem-discovered)
@@ -213,6 +213,7 @@ export class Server {
       this.lifecycleManager = new ContainerLifecycleManager({
         runtime: this.containerRuntime,
         sessionManager: this.sessionManager,
+        logger: this.logger.child('lifecycle'),
       });
 
       const lifecycleManager = this.lifecycleManager;
@@ -221,6 +222,7 @@ export class Server {
       const credFs = this.credentialFs;
 
       this.eventDispatcher = new EventDispatcher({
+        logger: this.logger.child('event-dispatcher'),
         getActiveSessionCount: (group) =>
           sessionManager.getAll().filter((s) => s.group === group).length,
         spawnAgent: async (group, env) => {

@@ -3,6 +3,7 @@ import { ContainerLifecycleManager } from './lifecycle-manager.js';
 import { MockContainerRuntime } from './mock-runtime.js';
 import { SessionManager } from '../session-manager.js';
 import type { ContainerHandle } from './runtime.js';
+import { configureLogging, resetLogging, type LogEntry, type LogSink } from '../logger.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -476,6 +477,72 @@ describe('ContainerLifecycleManager', () => {
       expect([r1, r2]).toContain(true);
       expect([r1, r2]).toContain(false);
       expect(manager.getAll()).toHaveLength(0);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Logging
+  // -----------------------------------------------------------------------
+
+  describe('logging', () => {
+    let logEntries: LogEntry[];
+
+    beforeEach(() => {
+      logEntries = [];
+      const logSink: LogSink = (entry) => logEntries.push(entry);
+      configureLogging({ level: 'debug', sink: logSink });
+    });
+
+    afterEach(() => {
+      resetLogging();
+    });
+
+    it('logs container spawn with group and image', async () => {
+      await manager.spawn(defaultSpawnRequest());
+
+      const spawnLog = logEntries.find((e) => e.msg === 'spawning container');
+      expect(spawnLog).toBeDefined();
+      expect(spawnLog!.group).toBe('email');
+      expect(spawnLog!.meta?.image).toBe('carapace-agent:latest');
+    });
+
+    it('logs container spawned with session and container IDs', async () => {
+      const result = await manager.spawn(defaultSpawnRequest());
+
+      const spawnedLog = logEntries.find((e) => e.msg === 'container spawned');
+      expect(spawnedLog).toBeDefined();
+      expect(spawnedLog!.session).toBe(result.session.sessionId);
+      expect(spawnedLog!.meta?.containerId).toBe(result.handle.id);
+    });
+
+    it('logs hasStdinData flag without logging actual stdinData', async () => {
+      await manager.spawn(defaultSpawnRequest({ stdinData: 'ANTHROPIC_API_KEY=sk-secret\n\n' }));
+
+      const spawnLog = logEntries.find((e) => e.msg === 'spawning container');
+      expect(spawnLog).toBeDefined();
+      expect(spawnLog!.meta?.hasStdinData).toBe(true);
+
+      // Verify no credential values in any log entry
+      const allJson = JSON.stringify(logEntries);
+      expect(allJson).not.toContain('sk-secret');
+      expect(allJson).not.toContain('ANTHROPIC_API_KEY');
+    });
+
+    it('logs container shutdown', async () => {
+      const { session } = await manager.spawn(defaultSpawnRequest());
+      await manager.shutdown(session.sessionId);
+
+      const shutdownLog = logEntries.find((e) => e.msg === 'container shut down');
+      expect(shutdownLog).toBeDefined();
+      expect(shutdownLog!.session).toBe(session.sessionId);
+    });
+
+    it('logs orphan cleanup count', async () => {
+      await manager.cleanupOrphans([]);
+
+      const cleanupLog = logEntries.find((e) => e.msg === 'orphan cleanup complete');
+      expect(cleanupLog).toBeDefined();
+      expect(cleanupLog!.meta?.cleaned).toBe(0);
     });
   });
 });
