@@ -27,7 +27,8 @@ RUN pnpm prune --prod
 FROM node:22-alpine AS runtime
 
 # Install bash (Claude Code installer requires it) + curl for the installer
-RUN apk add --no-cache bash curl
+# Remove busybox wget symlink to reduce attack surface
+RUN apk add --no-cache bash curl && rm -f /usr/bin/wget
 
 # Claude Code version — override at build time: --build-arg CLAUDE_CODE_VERSION=2.1.49
 # CI resolves latest automatically from the release channel URL:

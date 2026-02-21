@@ -155,8 +155,9 @@ describe('Dockerfile', () => {
   // -----------------------------------------------------------------------
 
   describe('dependencies', () => {
-    it('installs libzmq', () => {
-      expect(hasLine(/libzmq/)).toBe(true);
+    it('installs bash and curl', () => {
+      expect(hasLine(/apk add.*bash/)).toBe(true);
+      expect(hasLine(/apk add.*curl/)).toBe(true);
     });
   });
 });
