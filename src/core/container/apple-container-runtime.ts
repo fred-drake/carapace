@@ -138,6 +138,9 @@ export class AppleContainerRuntime implements ContainerRuntime {
 
   async build(options: ImageBuildOptions): Promise<string> {
     const args: string[] = ['build', '-t', options.tag];
+    // Apple Containers builder VM needs explicit DNS servers for network
+    // access during multi-stage builds (e.g. npm install, apt-get).
+    args.push('--dns', '1.1.1.1', '--dns', '8.8.8.8');
     if (options.dockerfile) {
       args.push('-f', options.dockerfile);
     }
@@ -153,19 +156,19 @@ export class AppleContainerRuntime implements ContainerRuntime {
     }
     args.push(options.contextDir);
     await this.container(...args);
-    const { stdout: idOut } = await this.container('images', '-q', options.tag);
-    return idOut.trim();
+    // Use 'container image inspect' to get the image digest
+    const { stdout: inspectOut } = await this.container('image', 'inspect', options.tag);
+    const inspected = JSON.parse(inspectOut.trim());
+    const digest = inspected?.[0]?.index?.digest ?? '';
+    return digest;
   }
 
   async inspectLabels(image: string): Promise<Record<string, string>> {
-    const { stdout } = await this.container(
-      'inspect',
-      '--format',
-      '{{json .Config.Labels}}',
-      image,
-    );
-    const parsed = JSON.parse(stdout.trim());
-    return parsed ?? {};
+    const { stdout } = await this.container('image', 'inspect', image);
+    const inspected = JSON.parse(stdout.trim());
+    // Labels are in variants[0].config.config.Labels
+    const labels = inspected?.[0]?.variants?.[0]?.config?.config?.Labels;
+    return labels ?? {};
   }
 
   // -----------------------------------------------------------------------
