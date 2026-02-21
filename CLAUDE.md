@@ -71,6 +71,47 @@ Tool risk levels: `"low"` (auto-execute) vs `"high"` (requires user confirmation
 
 Host-side SQLite at `data/{feature}/{group}.sqlite`. Credentials never enter the container.
 
+## End-to-End Prompt Flow
+
+The full pipeline from CLI to Claude Code running in a container:
+
+```
+carapace auth api-key|login → stores credential at $CARAPACE_HOME/credentials/
+carapace start             → detects runtime, creates Server with event dispatch pipeline
+carapace prompt "text"     → writes task.triggered JSON to $CARAPACE_HOME/run/prompts/
+Server polls prompts dir   → EventDispatcher → readCredentialStdin() → SpawnRequest
+LifecycleManager.spawn()   → container create -i + start -ai (stdin pipes credentials)
+Entrypoint reads stdin     → exports ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN
+Claude Code runs           → claude -p "text" (non-interactive) or claude (interactive)
+```
+
+Credential precedence: API key wins over OAuth token when both exist.
+
+## Wiring Checklist (main.ts)
+
+`createStartServer()` in `src/main.ts` is the factory that wires real dependencies
+into the Server. When adding new Server features:
+
+1. Add the field to `ServerConfig` or `ServerDeps`
+2. Thread it through `createStartServer()` — this is easily forgotten
+3. Wire real implementations (fs, runtime, etc.) in the factory
+
+The runtime is detected once in `main()` and passed into both the CLI deps
+(for image building) and `createStartServer()` (for container spawning).
+
+## Apple Containers Gotchas
+
+- **`--publish-socket` direction**: Publishes container sockets TO the host
+  (opposite of what's needed). Use `-v` bind mounts to make host sockets
+  accessible inside containers, same as Docker/Podman.
+- **stdinData**: Supports `container create -i` + `container start -ai` for
+  stdin piping (same pattern as Docker).
+- **VM-per-container**: Each container is a full lightweight VM. Spawn time
+  is ~100-150ms (total prompt-to-spawn ~260ms including polling interval).
+- **Image store is separate**: Apple Container images are NOT shared with
+  Docker/Podman. Images built with `container build` only exist in the
+  Apple Container image store.
+
 ## Known Issues
 
 - **Path aliases need runtime resolver**: `tsconfig.json` path aliases (`@carapace/core/*`, etc.) only work at type-check time. `tsc` with `NodeNext` does not rewrite imports in emitted JS. Add `tsc-alias` or equivalent to the build pipeline before code starts using aliases.
