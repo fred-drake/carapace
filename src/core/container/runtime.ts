@@ -133,6 +133,10 @@ export interface ContainerHandle {
   readonly name: string;
   /** Which runtime created this handle. */
   readonly runtime: RuntimeName;
+  /** Container's stdout stream (available when launched with stdin piping). */
+  readonly stdout?: NodeJS.ReadableStream;
+  /** Container's stderr stream (available when launched with stdin piping). */
+  readonly stderr?: NodeJS.ReadableStream;
 }
 
 // ---------------------------------------------------------------------------

@@ -34,13 +34,24 @@ export type ExecFn = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 /**
+ * Result of a spawn operation, providing access to the child process streams.
+ */
+export interface SpawnResult {
+  /** Child process stdout stream (available when stdio is piped). */
+  stdout?: NodeJS.ReadableStream;
+  /** Child process stderr stream (available when stdio is piped). */
+  stderr?: NodeJS.ReadableStream;
+}
+
+/**
  * Spawn function type for running a process with stdin data piped.
  *
  * Used by `docker start -ai` to pipe credentials to the container's stdin.
  * The spawn function should write stdinData to the child process's stdin
- * and detach without waiting for the process to exit.
+ * and detach without waiting for the process to exit. Returns stdout/stderr
+ * streams for output capture.
  */
-export type SpawnFn = (file: string, args: readonly string[], stdinData: string) => void;
+export type SpawnFn = (file: string, args: readonly string[], stdinData: string) => SpawnResult;
 
 // ---------------------------------------------------------------------------
 // Options
@@ -192,13 +203,19 @@ export class DockerRuntime implements ContainerRuntime {
     if (options.stdinData !== undefined) {
       // Two-step create + start for stdin piping (credential injection)
       const createArgs = this.buildCreateArgs(options, name);
-      const { stdout } = await this.docker(...createArgs);
-      const id = stdout.trim();
+      const { stdout: createOut } = await this.docker(...createArgs);
+      const id = createOut.trim();
 
       // Start container with stdin attached; pipe credentials
-      this.spawnFn(this.dockerPath, ['start', '-ai', id], options.stdinData);
+      const spawnResult = this.spawnFn(this.dockerPath, ['start', '-ai', id], options.stdinData);
 
-      return { id, name, runtime: this.name };
+      return {
+        id,
+        name,
+        runtime: this.name,
+        stdout: spawnResult.stdout,
+        stderr: spawnResult.stderr,
+      };
     }
 
     const args = this.buildRunArgs(options, name);
@@ -363,13 +380,18 @@ const defaultExec: ExecFn = async (file, args) => {
 /**
  * Default spawn function — uses child_process.spawn to run a process
  * with stdin data piped, then detaches without waiting for exit.
+ * Returns stdout/stderr streams for output capture.
  */
 const defaultSpawn: SpawnFn = (file, args, stdinData) => {
   const child = spawn(file, [...args], {
-    stdio: ['pipe', 'ignore', 'ignore'],
+    stdio: ['pipe', 'pipe', 'pipe'],
     detached: true,
   });
   child.stdin!.write(stdinData);
   child.stdin!.end();
   child.unref();
+  return {
+    stdout: child.stdout ?? undefined,
+    stderr: child.stderr ?? undefined,
+  };
 };

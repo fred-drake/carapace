@@ -680,6 +680,7 @@ describe('DockerRuntime', () => {
       spawnCalls = [];
       spawnFn = (file, args, stdinData) => {
         spawnCalls.push({ file, args, stdinData });
+        return {};
       };
       runtimeWithSpawn = new DockerRuntime({
         exec: mock.exec,
