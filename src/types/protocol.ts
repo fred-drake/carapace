@@ -54,6 +54,12 @@ export type Topic =
   | 'task.triggered'
   | 'plugin.ready'
   | 'plugin.stopping'
+  | 'response.system'
+  | 'response.chunk'
+  | 'response.tool_call'
+  | 'response.tool_result'
+  | 'response.end'
+  | 'response.error'
   | `tool.invoke.${string}`;
 
 // ---------------------------------------------------------------------------
@@ -112,6 +118,55 @@ export type RequestPayload = { arguments: Record<string, unknown> };
 
 /** Payload for response envelopes (ROUTER/DEALER channel). */
 export type ResponsePayload = { result: unknown; error: ErrorPayload | null };
+
+// ---------------------------------------------------------------------------
+// Response stream event payloads
+// ---------------------------------------------------------------------------
+
+/** Base fields shared by all response stream events. */
+export interface ResponseEventBase {
+  /** Full stream-json object for forward compatibility. */
+  raw: Record<string, unknown>;
+  /** Monotonic sequence number within the stream. */
+  seq: number;
+}
+
+/** Payload for `response.system` — session start info. */
+export interface SystemEventPayload extends ResponseEventBase {
+  claudeSessionId: string;
+  model?: string;
+}
+
+/** Payload for `response.chunk` — text content deltas. */
+export interface ChunkEventPayload extends ResponseEventBase {
+  text: string;
+}
+
+/** Payload for `response.tool_call` — Claude invoking a tool. */
+export interface ToolCallEventPayload extends ResponseEventBase {
+  toolName: string;
+  toolInput: Record<string, unknown>;
+}
+
+/** Payload for `response.tool_result` — tool result metadata only (no payload content). */
+export interface ToolResultEventPayload extends ResponseEventBase {
+  toolName: string;
+  success: boolean;
+  durationMs?: number;
+}
+
+/** Payload for `response.end` — session complete. */
+export interface EndEventPayload extends ResponseEventBase {
+  claudeSessionId: string;
+  exitCode: number;
+  usage?: { inputTokens: number; outputTokens: number };
+  cost?: { totalUsd: number };
+}
+
+/** Payload for `response.error` — stream-level errors. */
+export interface ErrorEventPayload extends ResponseEventBase {
+  reason: string;
+}
 
 // ---------------------------------------------------------------------------
 // Concrete envelope types
