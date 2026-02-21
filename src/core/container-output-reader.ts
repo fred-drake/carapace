@@ -23,6 +23,8 @@ export interface ContainerOutputReaderDeps {
   eventBus: { publish(envelope: EventEnvelope): Promise<void> };
   claudeSessionStore: { save(group: string, claudeSessionId: string): void };
   logger?: { info(...args: unknown[]): void; warn(...args: unknown[]): void };
+  /** Optional response sanitizer for defense-in-depth credential redaction on response.* events. */
+  sanitizer?: { sanitize(value: unknown): { value: unknown; redactedPaths: string[] } };
 }
 
 export interface OutputSession {
@@ -55,6 +57,12 @@ export class ContainerOutputReader {
       const event = parser.parseLine(line);
       if (!event) continue;
 
+      // Apply response sanitizer if available (defense-in-depth credential redaction)
+      const rawPayload = { ...event.payload };
+      const payload = this.deps.sanitizer
+        ? (this.deps.sanitizer.sanitize(rawPayload).value as Record<string, unknown>)
+        : rawPayload;
+
       const envelope: EventEnvelope = {
         id: crypto.randomUUID(),
         version: PROTOCOL_VERSION,
@@ -64,7 +72,7 @@ export class ContainerOutputReader {
         correlation: null,
         timestamp: new Date().toISOString(),
         group: session.group,
-        payload: { ...event.payload },
+        payload,
       };
 
       await this.deps.eventBus.publish(envelope);

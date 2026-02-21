@@ -180,45 +180,45 @@ describe('entrypoint.sh', () => {
   });
 
   // -------------------------------------------------------------------------
-  // CARAPACE_RESUME_SESSION tests
+  // CARAPACE_RESUME_SESSION_ID tests
   // -------------------------------------------------------------------------
 
   it('adds --resume with task prompt and resume session', async () => {
     const result = await runEntrypointWithStdin('\n', [], {
       CARAPACE_TASK_PROMPT: 'Continue work',
-      CARAPACE_RESUME_SESSION: 'session-abc-123',
+      CARAPACE_RESUME_SESSION_ID: '550e8400-e29b-41d4-a716-446655440000',
     });
     const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
     expect(args).toContain('-p');
     expect(args).toContain('Continue work');
     expect(args).toContain('--output-format stream-json');
     expect(args).toContain('--verbose');
-    expect(args).toContain('--resume session-abc-123');
+    expect(args).toContain('--resume 550e8400-e29b-41d4-a716-446655440000');
   });
 
   it('adds --resume without task prompt (interactive resume)', async () => {
     const result = await runEntrypointWithStdin('\n', [], {
-      CARAPACE_RESUME_SESSION: 'session-abc-123',
+      CARAPACE_RESUME_SESSION_ID: '550e8400-e29b-41d4-a716-446655440000',
     });
     const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
     expect(args).toContain('--dangerously-skip-permissions');
-    expect(args).toContain('--resume session-abc-123');
+    expect(args).toContain('--resume 550e8400-e29b-41d4-a716-446655440000');
     // Interactive mode: no -p, no --output-format, no --verbose
     expect(args).not.toMatch(/\s-p\s|^-p\s|\s-p$/);
     expect(args).not.toContain('--output-format');
     expect(args).not.toContain('--verbose');
   });
 
-  it('does not add --resume when CARAPACE_RESUME_SESSION is empty', async () => {
+  it('does not add --resume when CARAPACE_RESUME_SESSION_ID is empty', async () => {
     const result = await runEntrypointWithStdin('\n', [], {
       CARAPACE_TASK_PROMPT: 'Do something',
-      CARAPACE_RESUME_SESSION: '',
+      CARAPACE_RESUME_SESSION_ID: '',
     });
     const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
     expect(args).not.toContain('--resume');
   });
 
-  it('does not add --resume when CARAPACE_RESUME_SESSION is unset', async () => {
+  it('does not add --resume when CARAPACE_RESUME_SESSION_ID is unset', async () => {
     const result = await runEntrypointWithStdin('\n', [], {
       CARAPACE_TASK_PROMPT: 'Do something',
     });
@@ -229,14 +229,46 @@ describe('entrypoint.sh', () => {
   it('injects credentials with resume session and task prompt together', async () => {
     const result = await runEntrypointWithStdin('ANTHROPIC_API_KEY=sk-ant-test\n\n', [], {
       CARAPACE_TASK_PROMPT: 'Resume the work',
-      CARAPACE_RESUME_SESSION: 'session-xyz',
+      CARAPACE_RESUME_SESSION_ID: '6ba7b810-9dad-11d1-80b4-00c04fd430c8',
     });
     expect(result.stdout).toContain('ANTHROPIC_API_KEY=sk-ant-test');
     const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
     expect(args).toContain('-p');
     expect(args).toContain('Resume the work');
-    expect(args).toContain('--resume session-xyz');
+    expect(args).toContain('--resume 6ba7b810-9dad-11d1-80b4-00c04fd430c8');
     expect(args).toContain('--output-format stream-json');
     expect(args).toContain('--verbose');
+  });
+
+  // -------------------------------------------------------------------------
+  // Security: UUID validation on resume session ID
+  // -------------------------------------------------------------------------
+
+  it('rejects non-UUID resume session ID (defense-in-depth)', async () => {
+    const result = await runEntrypointWithStdin('\n', [], {
+      CARAPACE_TASK_PROMPT: 'Do something',
+      CARAPACE_RESUME_SESSION_ID: 'malicious --flag injection',
+    });
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).not.toContain('--resume');
+    expect(result.stderr).toContain('Invalid CARAPACE_RESUME_SESSION_ID');
+  });
+
+  it('rejects resume session ID with shell metacharacters', async () => {
+    const result = await runEntrypointWithStdin('\n', [], {
+      CARAPACE_TASK_PROMPT: 'Do something',
+      CARAPACE_RESUME_SESSION_ID: '$(whoami)',
+    });
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).not.toContain('--resume');
+  });
+
+  it('rejects resume session ID with wrong format', async () => {
+    const result = await runEntrypointWithStdin('\n', [], {
+      CARAPACE_TASK_PROMPT: 'Do something',
+      CARAPACE_RESUME_SESSION_ID: 'not-a-uuid-at-all',
+    });
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).not.toContain('--resume');
   });
 });

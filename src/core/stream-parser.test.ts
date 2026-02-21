@@ -164,8 +164,13 @@ describe('StreamParser', () => {
     expect(payload.success).toBe(true);
     expect(payload.durationMs).toBe(42);
     expect(payload.seq).toBe(1);
-    // Ensure no content leaks into the payload (metadata only)
+    // Security: no content leaks into the payload (metadata only)
     expect((payload as Record<string, unknown>)['content']).toBeUndefined();
+    // Security: content is also stripped from raw to prevent data leakage
+    expect((payload.raw as Record<string, unknown>)['content']).toBeUndefined();
+    // Verify other raw fields are preserved
+    expect((payload.raw as Record<string, unknown>)['type']).toBe('tool_result');
+    expect((payload.raw as Record<string, unknown>)['name']).toBe('Read');
   });
 
   it('maps is_error: true to success: false', () => {
@@ -392,6 +397,32 @@ describe('StreamParser', () => {
     expect(result!.topic).toBe('response.system');
   });
 
+  // ---------------------------------------------------------------------------
+  // JSON depth limit (matches IPC 64-level limit)
+  // ---------------------------------------------------------------------------
+
+  it('returns response.error for deeply nested JSON exceeding 64 levels', () => {
+    // Build valid JSON with 65 nesting levels
+    const nested = '{"a":'.repeat(65) + '{}' + '}'.repeat(65);
+    const result = parser.parseLine(nested);
+
+    expect(result).not.toBeNull();
+    expect(result!.topic).toBe('response.error');
+    const payload = result!.payload as ErrorEventPayload;
+    expect(payload.reason).toMatch(/depth/i);
+  });
+
+  it('accepts JSON at exactly 64 nesting levels', () => {
+    // 63 wrapping levels + 1 inner {} = 64 total depth
+    const nested = '{"a":'.repeat(63) + '{}' + '}'.repeat(63);
+    const result = parser.parseLine(nested);
+
+    // At 64 levels, depth check should pass (parse may result in unknown type → null)
+    if (result !== null) {
+      expect(result.topic).not.toBe('response.error');
+    }
+  });
+
   it('does increment seq for error results (malformed JSON)', () => {
     parser.parseLine('{bad}');
     const line = JSON.stringify({
@@ -400,5 +431,50 @@ describe('StreamParser', () => {
     });
     const result = parser.parseLine(line);
     expect((result!.payload as SystemEventPayload).seq).toBe(2);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Security: tool_result content stripping
+  // ---------------------------------------------------------------------------
+
+  it('strips content from raw in tool_result even when content contains secrets', () => {
+    const line = JSON.stringify({
+      type: 'tool_result',
+      tool_use_id: 'toolu_sec',
+      name: 'Read',
+      content: 'ANTHROPIC_API_KEY=sk-ant-secret-key-here\nDB_PASSWORD=hunter2',
+      is_error: false,
+    });
+    const result = parser.parseLine(line);
+    expect(result).not.toBeNull();
+    const payload = result!.payload as ToolResultEventPayload;
+    // Content must not appear anywhere in the payload
+    const payloadStr = JSON.stringify(payload);
+    expect(payloadStr).not.toContain('sk-ant-secret-key-here');
+    expect(payloadStr).not.toContain('hunter2');
+    // raw.content specifically must be absent
+    expect((payload.raw as Record<string, unknown>)['content']).toBeUndefined();
+  });
+
+  it('preserves all non-content fields in tool_result raw', () => {
+    const line = JSON.stringify({
+      type: 'tool_result',
+      tool_use_id: 'toolu_fields',
+      name: 'Bash',
+      content: 'should be stripped',
+      is_error: false,
+      duration_ms: 100,
+      extra_field: 'preserved',
+    });
+    const result = parser.parseLine(line);
+    expect(result).not.toBeNull();
+    const raw = result!.payload.raw as Record<string, unknown>;
+    expect(raw['type']).toBe('tool_result');
+    expect(raw['tool_use_id']).toBe('toolu_fields');
+    expect(raw['name']).toBe('Bash');
+    expect(raw['is_error']).toBe(false);
+    expect(raw['duration_ms']).toBe(100);
+    expect(raw['extra_field']).toBe('preserved');
+    expect(raw['content']).toBeUndefined();
   });
 });

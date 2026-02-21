@@ -133,6 +133,15 @@ describe('ContainerOutputReader', () => {
       success: true,
       durationMs: 42,
     });
+    // Security: content must not leak through the event bus
+    const payloadStr = JSON.stringify(published[0]!.payload);
+    expect(payloadStr).not.toContain('file contents');
+    expect((published[0]!.payload as Record<string, unknown>)['content']).toBeUndefined();
+    expect(
+      ((published[0]!.payload as Record<string, unknown>)['raw'] as Record<string, unknown>)?.[
+        'content'
+      ],
+    ).toBeUndefined();
   });
 
   // -------------------------------------------------------------------------
@@ -372,5 +381,92 @@ describe('ContainerOutputReader', () => {
     ]);
     // Both system and end events should trigger saves
     expect(saved).toHaveLength(2);
+  });
+
+  // -------------------------------------------------------------------------
+  // ResponseSanitizer integration
+  // -------------------------------------------------------------------------
+
+  describe('ResponseSanitizer on response.* events', () => {
+    it('sanitizes credential patterns in payload raw fields before publishing', async () => {
+      const { deps, published } = createMockDeps();
+      const sanitizer = {
+        sanitize: vi.fn((value: unknown) => ({
+          value,
+          redactedPaths: [],
+        })),
+      };
+      const reader = new ContainerOutputReader({ ...deps, sanitizer });
+
+      const lines = [
+        JSON.stringify({
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Here is a token: Bearer sk-abc123xyz' }],
+          },
+        }),
+      ];
+
+      await reader.start(streamFrom(lines), makeSession());
+
+      // Sanitizer should have been called once for the chunk event payload
+      expect(sanitizer.sanitize).toHaveBeenCalledTimes(1);
+      expect(published).toHaveLength(1);
+    });
+
+    it('replaces credential patterns in text content', async () => {
+      const { deps, published } = createMockDeps();
+      // Real-ish sanitizer that replaces bearer tokens
+      const sanitizer = {
+        sanitize: (value: unknown) => {
+          const json = JSON.stringify(value);
+          const cleaned = json.replace(/Bearer\s+[A-Za-z0-9._~+/=-]{6,}/g, 'Bearer [REDACTED]');
+          return {
+            value: JSON.parse(cleaned),
+            redactedPaths: json !== cleaned ? ['$.text'] : [],
+          };
+        },
+      };
+      const reader = new ContainerOutputReader({ ...deps, sanitizer });
+
+      const lines = [
+        JSON.stringify({
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Token: Bearer sk-ant-secret123456' }],
+          },
+        }),
+      ];
+
+      await reader.start(streamFrom(lines), makeSession());
+
+      expect(published).toHaveLength(1);
+      const payloadStr = JSON.stringify(published[0]!.payload);
+      expect(payloadStr).not.toContain('sk-ant-secret123456');
+      expect(payloadStr).toContain('[REDACTED]');
+    });
+
+    it('works without sanitizer (backward compatible)', async () => {
+      const { deps, published } = createMockDeps();
+      // No sanitizer in deps
+      const reader = new ContainerOutputReader(deps);
+
+      const lines = [
+        JSON.stringify({
+          type: 'assistant',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Hello' }],
+          },
+        }),
+      ];
+
+      await reader.start(streamFrom(lines), makeSession());
+
+      expect(published).toHaveLength(1);
+      expect((published[0]!.payload as Record<string, unknown>)['text']).toBe('Hello');
+    });
   });
 });
