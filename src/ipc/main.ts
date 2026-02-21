@@ -16,6 +16,7 @@ import { Dealer } from 'zeromq';
 import { IpcClient } from './ipc-client.js';
 import { parseCliArgs, formatOutput } from './cli.js';
 import type { DealerSocket, DealerMessageHandler } from '../types/socket.js';
+import { createIpcLogger } from './ipc-logger.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -23,6 +24,7 @@ import type { DealerSocket, DealerMessageHandler } from '../types/socket.js';
 
 const SOCKET_PATH = process.env['CARAPACE_SOCKET'] ?? 'ipc:///run/carapace.sock';
 const TIMEOUT_MS = parseInt(process.env['CARAPACE_TIMEOUT'] ?? '35000', 10);
+const logger = createIpcLogger('ipc');
 
 // ---------------------------------------------------------------------------
 // ZeroMQ adapter
@@ -82,6 +84,7 @@ class ZmqDealerAdapter implements DealerSocket {
 async function main(): Promise<void> {
   const parsed = parseCliArgs(process.argv);
   if (!parsed.ok) {
+    logger.error('CLI parse failed', { error: parsed.error });
     const errorJson = JSON.stringify({
       code: 'CLI_ERROR',
       message: parsed.error,
@@ -93,8 +96,16 @@ async function main(): Promise<void> {
 
   const { topic, arguments: args } = parsed.value;
 
+  logger.info('starting', {
+    topic,
+    arg_keys: Object.keys(args),
+    socket: SOCKET_PATH,
+    timeout_ms: TIMEOUT_MS,
+  });
+
   const dealer = new ZmqDealerAdapter();
   await dealer.connect(SOCKET_PATH);
+  logger.debug('dealer connected', { socket: SOCKET_PATH });
 
   const client = new IpcClient(dealer, { timeoutMs: TIMEOUT_MS });
 
@@ -109,10 +120,12 @@ async function main(): Promise<void> {
       process.stderr.write(output.stderr + '\n');
     }
 
+    logger.info('completed', { topic, exitCode: output.exitCode });
     await client.close();
     process.exit(output.exitCode);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    logger.error('invocation failed', { topic, error: message });
     const errorJson = JSON.stringify({
       code: 'IPC_ERROR',
       message,
