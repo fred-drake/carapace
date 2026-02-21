@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventDispatcher } from './event-dispatcher.js';
 import type { EventDispatcherDeps, DispatchResult } from './event-dispatcher.js';
+import type { PluginHandler, SessionLookup } from './plugin-handler.js';
 import { createEventEnvelope } from '../testing/factories.js';
 import { configureLogging, resetLogging, type LogEntry, type LogSink } from './logger.js';
 
@@ -25,6 +26,16 @@ const VALID_INBOUND_PAYLOAD = {
   content_type: 'text',
   body: 'Hello',
 };
+
+/** Create a minimal PluginHandler for testing. */
+function createMockHandler(overrides?: Partial<PluginHandler>): PluginHandler {
+  return {
+    initialize: async () => {},
+    handleToolInvocation: async () => ({ ok: true, result: {} }),
+    shutdown: async () => {},
+    ...overrides,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -430,6 +441,299 @@ describe('EventDispatcher', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Session policy
+  // -----------------------------------------------------------------------
+
+  describe('session policy', () => {
+    describe('fresh policy (default)', () => {
+      it('spawns without resume when no policy is configured', async () => {
+        deps = createDeps();
+        dispatcher = new EventDispatcher(deps);
+
+        const envelope = createEventEnvelope({
+          topic: 'task.triggered',
+          group: 'email',
+          payload: { prompt: 'test' },
+        });
+
+        await dispatcher.dispatch(envelope);
+
+        expect(deps.spawnAgent).toHaveBeenCalledWith('email', {
+          CARAPACE_TASK_PROMPT: 'test',
+        });
+      });
+
+      it('spawns without resume when policy is explicitly fresh', async () => {
+        deps = createDeps({
+          getSessionPolicy: vi.fn(() => 'fresh'),
+        });
+        dispatcher = new EventDispatcher(deps);
+
+        const envelope = createEventEnvelope({
+          topic: 'message.inbound',
+          group: 'email',
+          payload: VALID_INBOUND_PAYLOAD,
+        });
+
+        await dispatcher.dispatch(envelope);
+
+        // No CARAPACE_RESUME_SESSION_ID in the env
+        expect(deps.spawnAgent).toHaveBeenCalledWith('email', undefined);
+      });
+    });
+
+    describe('resume policy', () => {
+      it('includes resume session ID in env when latest session exists', async () => {
+        deps = createDeps({
+          getSessionPolicy: vi.fn(() => 'resume'),
+          getLatestSession: vi.fn(() => 'claude-sess-abc-123'),
+        });
+        dispatcher = new EventDispatcher(deps);
+
+        const envelope = createEventEnvelope({
+          topic: 'message.inbound',
+          group: 'email',
+          payload: VALID_INBOUND_PAYLOAD,
+        });
+
+        await dispatcher.dispatch(envelope);
+
+        expect(deps.getLatestSession).toHaveBeenCalledWith('email');
+        expect(deps.spawnAgent).toHaveBeenCalledWith('email', {
+          CARAPACE_RESUME_SESSION_ID: 'claude-sess-abc-123',
+        });
+      });
+
+      it('spawns fresh when no latest session is found', async () => {
+        deps = createDeps({
+          getSessionPolicy: vi.fn(() => 'resume'),
+          getLatestSession: vi.fn(() => null),
+        });
+        dispatcher = new EventDispatcher(deps);
+
+        const envelope = createEventEnvelope({
+          topic: 'message.inbound',
+          group: 'email',
+          payload: VALID_INBOUND_PAYLOAD,
+        });
+
+        await dispatcher.dispatch(envelope);
+
+        expect(deps.getLatestSession).toHaveBeenCalledWith('email');
+        expect(deps.spawnAgent).toHaveBeenCalledWith('email', undefined);
+      });
+
+      it('merges resume session ID with task prompt env', async () => {
+        deps = createDeps({
+          getSessionPolicy: vi.fn(() => 'resume'),
+          getLatestSession: vi.fn(() => 'claude-sess-xyz'),
+        });
+        dispatcher = new EventDispatcher(deps);
+
+        const envelope = createEventEnvelope({
+          topic: 'task.triggered',
+          group: 'email',
+          payload: { prompt: 'Check inbox' },
+        });
+
+        await dispatcher.dispatch(envelope);
+
+        expect(deps.spawnAgent).toHaveBeenCalledWith('email', {
+          CARAPACE_TASK_PROMPT: 'Check inbox',
+          CARAPACE_RESUME_SESSION_ID: 'claude-sess-xyz',
+        });
+      });
+    });
+
+    describe('explicit policy', () => {
+      it('calls plugin resolveSession and uses returned session ID', async () => {
+        const resolveSession = vi.fn(async () => 'plugin-chosen-sess');
+        const handler = createMockHandler({ resolveSession });
+        const mockLookup: SessionLookup = {
+          latest: async () => null,
+          find: async () => [],
+        };
+
+        deps = createDeps({
+          getSessionPolicy: vi.fn(() => 'explicit'),
+          getPluginHandler: vi.fn(() => handler),
+          createSessionLookup: vi.fn(() => mockLookup),
+        });
+        dispatcher = new EventDispatcher(deps);
+
+        const envelope = createEventEnvelope({
+          topic: 'message.inbound',
+          group: 'email',
+          payload: VALID_INBOUND_PAYLOAD,
+        });
+
+        await dispatcher.dispatch(envelope);
+
+        expect(resolveSession).toHaveBeenCalledWith(envelope, mockLookup);
+        expect(deps.spawnAgent).toHaveBeenCalledWith('email', {
+          CARAPACE_RESUME_SESSION_ID: 'plugin-chosen-sess',
+        });
+      });
+
+      it('spawns fresh when resolveSession returns null', async () => {
+        const resolveSession = vi.fn(async () => null);
+        const handler = createMockHandler({ resolveSession });
+
+        deps = createDeps({
+          getSessionPolicy: vi.fn(() => 'explicit'),
+          getPluginHandler: vi.fn(() => handler),
+          createSessionLookup: vi.fn(() => ({
+            latest: async () => null,
+            find: async () => [],
+          })),
+        });
+        dispatcher = new EventDispatcher(deps);
+
+        const envelope = createEventEnvelope({
+          topic: 'message.inbound',
+          group: 'email',
+          payload: VALID_INBOUND_PAYLOAD,
+        });
+
+        await dispatcher.dispatch(envelope);
+
+        expect(deps.spawnAgent).toHaveBeenCalledWith('email', undefined);
+      });
+
+      it('falls back to fresh when handler has no resolveSession', async () => {
+        const handler = createMockHandler(); // no resolveSession
+
+        deps = createDeps({
+          getSessionPolicy: vi.fn(() => 'explicit'),
+          getPluginHandler: vi.fn(() => handler),
+          createSessionLookup: vi.fn(() => ({
+            latest: async () => null,
+            find: async () => [],
+          })),
+        });
+        dispatcher = new EventDispatcher(deps);
+
+        const envelope = createEventEnvelope({
+          topic: 'message.inbound',
+          group: 'email',
+          payload: VALID_INBOUND_PAYLOAD,
+        });
+
+        await dispatcher.dispatch(envelope);
+
+        expect(deps.spawnAgent).toHaveBeenCalledWith('email', undefined);
+      });
+
+      it('falls back to fresh when no handler is found for group', async () => {
+        deps = createDeps({
+          getSessionPolicy: vi.fn(() => 'explicit'),
+          getPluginHandler: vi.fn(() => undefined),
+          createSessionLookup: vi.fn(() => ({
+            latest: async () => null,
+            find: async () => [],
+          })),
+        });
+        dispatcher = new EventDispatcher(deps);
+
+        const envelope = createEventEnvelope({
+          topic: 'message.inbound',
+          group: 'email',
+          payload: VALID_INBOUND_PAYLOAD,
+        });
+
+        await dispatcher.dispatch(envelope);
+
+        expect(deps.spawnAgent).toHaveBeenCalledWith('email', undefined);
+      });
+
+      it('returns error when resolveSession throws', async () => {
+        const resolveSession = vi.fn(async () => {
+          throw new Error('Plugin resolver crashed');
+        });
+        const handler = createMockHandler({ resolveSession });
+
+        deps = createDeps({
+          getSessionPolicy: vi.fn(() => 'explicit'),
+          getPluginHandler: vi.fn(() => handler),
+          createSessionLookup: vi.fn(() => ({
+            latest: async () => null,
+            find: async () => [],
+          })),
+        });
+        dispatcher = new EventDispatcher(deps);
+
+        const envelope = createEventEnvelope({
+          topic: 'message.inbound',
+          group: 'email',
+          payload: VALID_INBOUND_PAYLOAD,
+        });
+
+        const result = await dispatcher.dispatch(envelope);
+
+        expect(result.action).toBe('error');
+        if (result.action === 'error') {
+          expect(result.reason).toContain('Plugin resolver crashed');
+        }
+      });
+
+      it('merges explicit session ID with task prompt env', async () => {
+        const resolveSession = vi.fn(async () => 'explicit-sess');
+        const handler = createMockHandler({ resolveSession });
+
+        deps = createDeps({
+          getSessionPolicy: vi.fn(() => 'explicit'),
+          getPluginHandler: vi.fn(() => handler),
+          createSessionLookup: vi.fn(() => ({
+            latest: async () => null,
+            find: async () => [],
+          })),
+        });
+        dispatcher = new EventDispatcher(deps);
+
+        const envelope = createEventEnvelope({
+          topic: 'task.triggered',
+          group: 'email',
+          payload: { prompt: 'Process inbox' },
+        });
+
+        await dispatcher.dispatch(envelope);
+
+        expect(deps.spawnAgent).toHaveBeenCalledWith('email', {
+          CARAPACE_TASK_PROMPT: 'Process inbox',
+          CARAPACE_RESUME_SESSION_ID: 'explicit-sess',
+        });
+      });
+    });
+
+    describe('security — never trust wire session IDs', () => {
+      it('ignores session_id field in event payload', async () => {
+        deps = createDeps({
+          getSessionPolicy: vi.fn(() => 'fresh'),
+        });
+        dispatcher = new EventDispatcher(deps);
+
+        const envelope = createEventEnvelope({
+          topic: 'task.triggered',
+          group: 'email',
+          payload: {
+            prompt: 'test',
+            session_id: 'injected-session-from-wire',
+          },
+        });
+
+        await dispatcher.dispatch(envelope);
+
+        // The env should NOT contain the injected session_id
+        const spawnCall = (deps.spawnAgent as ReturnType<typeof vi.fn>).mock.calls[0]!;
+        const env = spawnCall[1] as Record<string, string> | undefined;
+        if (env) {
+          expect(env['CARAPACE_RESUME_SESSION_ID']).toBeUndefined();
+        }
+      });
+    });
+  });
+
+  // -----------------------------------------------------------------------
   // Logging
   // -----------------------------------------------------------------------
 
@@ -518,6 +822,26 @@ describe('EventDispatcher', () => {
       const recvLog = logEntries.find((e) => e.msg === 'dispatch received');
       expect(recvLog).toBeDefined();
       expect(recvLog!.topic).toBe('agent.started');
+    });
+
+    it('logs session policy resolution', async () => {
+      deps = createDeps({
+        getSessionPolicy: vi.fn(() => 'resume'),
+        getLatestSession: vi.fn(() => 'claude-sess-abc'),
+      });
+      dispatcher = new EventDispatcher(deps);
+
+      const envelope = createEventEnvelope({
+        topic: 'message.inbound',
+        group: 'email',
+        payload: VALID_INBOUND_PAYLOAD,
+      });
+      await dispatcher.dispatch(envelope);
+
+      const policyLog = logEntries.find((e) => e.msg === 'session policy resolved');
+      expect(policyLog).toBeDefined();
+      expect(policyLog!.meta?.policy).toBe('resume');
+      expect(policyLog!.meta?.resumeSessionId).toBe('claude-sess-abc');
     });
   });
 });

@@ -9,9 +9,13 @@
  * - Other topics       → drop (logged, no spawn)
  *
  * Concurrent session limits are enforced for all spawn decisions.
+ * Session policy (fresh / resume / explicit) controls whether the
+ * spawned container receives a `--resume` session ID.
  */
 
 import type { EventEnvelope } from '../types/protocol.js';
+import type { SessionPolicy } from '../types/manifest.js';
+import type { PluginHandler, SessionLookup } from './plugin-handler.js';
 import { validateMessageInbound } from './event-schemas.js';
 import type { AuditEntry } from './audit-log.js';
 import { createLogger, type Logger } from './logger.js';
@@ -39,6 +43,17 @@ export interface EventDispatcherDeps {
   auditLog?: AuditLogSink;
   /** Optional logger for structured logging. */
   logger?: Logger;
+
+  // -- Session policy deps (optional; fresh behavior when absent) ----------
+
+  /** Get the session policy for a group (from plugin manifest). */
+  getSessionPolicy?: (group: string) => SessionPolicy;
+  /** Get the latest resumable Claude session ID for a group. */
+  getLatestSession?: (group: string) => string | null;
+  /** Get the plugin handler for a group (for explicit policy). */
+  getPluginHandler?: (group: string) => PluginHandler | undefined;
+  /** Create a SessionLookup scoped to a group (for explicit policy). */
+  createSessionLookup?: (group: string) => SessionLookup;
 }
 
 /** Discriminated union of dispatch outcomes. */
@@ -129,8 +144,22 @@ export class EventDispatcher {
       };
     }
 
-    // Build optional environment from task prompt
-    const env = this.extractSpawnEnv(envelope);
+    // Resolve session policy
+    let resumeSessionId: string | null = null;
+    try {
+      resumeSessionId = await this.resolveSessionPolicy(envelope);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error('session policy resolution failed', {
+        topic,
+        group,
+        error: err instanceof Error ? err : new Error(String(err)),
+      });
+      return { action: 'error', reason: message, group };
+    }
+
+    // Build spawn environment (task prompt + optional resume session ID)
+    const env = this.buildSpawnEnv(envelope, resumeSessionId);
 
     // Spawn the agent
     try {
@@ -152,6 +181,84 @@ export class EventDispatcher {
   // Private helpers
   // -----------------------------------------------------------------------
 
+  /**
+   * Resolve the session policy for a group and return the resume session
+   * ID (or null for fresh). Throws on explicit policy resolver errors.
+   */
+  private async resolveSessionPolicy(envelope: EventEnvelope): Promise<string | null> {
+    const { group } = envelope;
+    const policy = this.deps.getSessionPolicy?.(group) ?? 'fresh';
+
+    if (policy === 'fresh') {
+      return null;
+    }
+
+    if (policy === 'resume') {
+      const sessionId = this.deps.getLatestSession?.(group) ?? null;
+      this.logger.debug('session policy resolved', {
+        group,
+        policy: 'resume',
+        resumeSessionId: sessionId ?? 'none',
+      });
+      return sessionId;
+    }
+
+    // explicit: call plugin's resolveSession()
+    const handler = this.deps.getPluginHandler?.(group);
+    if (!handler?.resolveSession) {
+      this.logger.debug('session policy resolved', {
+        group,
+        policy: 'explicit',
+        resumeSessionId: 'none (no resolver)',
+      });
+      return null;
+    }
+
+    const lookup = this.deps.createSessionLookup?.(group);
+    if (!lookup) {
+      this.logger.debug('session policy resolved', {
+        group,
+        policy: 'explicit',
+        resumeSessionId: 'none (no lookup)',
+      });
+      return null;
+    }
+
+    const sessionId = await handler.resolveSession(envelope, lookup);
+    this.logger.debug('session policy resolved', {
+      group,
+      policy: 'explicit',
+      resumeSessionId: sessionId ?? 'none',
+    });
+    return sessionId;
+  }
+
+  /**
+   * Build the spawn environment by merging task prompt and resume session ID.
+   * Returns undefined when no env vars are needed.
+   */
+  private buildSpawnEnv(
+    envelope: EventEnvelope,
+    resumeSessionId: string | null,
+  ): Record<string, string> | undefined {
+    let env: Record<string, string> | undefined;
+
+    // Task prompt from payload
+    if (envelope.topic === 'task.triggered') {
+      const prompt = (envelope.payload as Record<string, unknown>)['prompt'];
+      if (typeof prompt === 'string' && prompt.length > 0) {
+        env = { ...env, CARAPACE_TASK_PROMPT: prompt };
+      }
+    }
+
+    // Resume session ID from policy resolution (never from wire)
+    if (resumeSessionId) {
+      env = { ...env, CARAPACE_RESUME_SESSION_ID: resumeSessionId };
+    }
+
+    return env;
+  }
+
   /** Log a rejected event to the audit log (if configured). */
   private auditReject(envelope: EventEnvelope, reason: string): void {
     if (!this.deps.auditLog) return;
@@ -165,16 +272,5 @@ export class EventDispatcher {
       outcome: 'rejected',
       reason,
     });
-  }
-
-  /** Extract environment variables from the event payload for the spawn. */
-  private extractSpawnEnv(envelope: EventEnvelope): Record<string, string> | undefined {
-    if (envelope.topic === 'task.triggered') {
-      const prompt = (envelope.payload as Record<string, unknown>)['prompt'];
-      if (typeof prompt === 'string' && prompt.length > 0) {
-        return { CARAPACE_TASK_PROMPT: prompt };
-      }
-    }
-    return undefined;
   }
 }
