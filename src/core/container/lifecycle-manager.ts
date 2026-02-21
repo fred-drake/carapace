@@ -17,6 +17,8 @@ import type {
   ContainerState,
 } from './runtime.js';
 import type { SessionManager, Session } from '../session-manager.js';
+import { ContainerOutputReader } from '../container-output-reader.js';
+import type { EventEnvelope } from '../../types/protocol.js';
 import { createLogger, type Logger } from '../logger.js';
 
 // ---------------------------------------------------------------------------
@@ -35,6 +37,13 @@ export interface LifecycleManagerOptions {
   networkName?: string;
   /** Optional logger for structured logging. */
   logger?: Logger;
+  /** Event bus for publishing streaming output events. Required for ContainerOutputReader. */
+  eventBus?: { publish(envelope: EventEnvelope): Promise<void> };
+  /** Claude session store for persisting/retrieving session IDs. Required for ContainerOutputReader. */
+  claudeSessionStore?: {
+    save(group: string, claudeSessionId: string): void;
+    getLatest(group: string): string | null;
+  };
 }
 
 /** High-level request to spawn an agent container. */
@@ -57,6 +66,12 @@ export interface SpawnRequest {
    * `docker start -ai` so credentials never appear in `docker inspect`.
    */
   stdinData?: string;
+  /**
+   * Host-side path to the per-group Claude state directory.
+   * Mounted read-write at /home/user/.claude inside the container.
+   * Each group MUST have its own isolated path (security P0).
+   */
+  claudeStatePath?: string;
 }
 
 /** A container managed by the lifecycle manager. */
@@ -73,6 +88,7 @@ export interface ManagedContainer {
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
 const CONTAINER_SOCKET_PATH = '/sockets/carapace.sock';
+const CONTAINER_CLAUDE_STATE_PATH = '/home/user/.claude';
 
 // ---------------------------------------------------------------------------
 // ContainerLifecycleManager
@@ -84,6 +100,11 @@ export class ContainerLifecycleManager {
   private readonly shutdownTimeoutMs: number;
   private readonly networkName?: string;
   private readonly logger: Logger;
+  private readonly eventBus?: { publish(envelope: EventEnvelope): Promise<void> };
+  private readonly claudeSessionStore?: {
+    save(group: string, claudeSessionId: string): void;
+    getLatest(group: string): string | null;
+  };
 
   /** Tracked containers indexed by session ID. */
   private readonly containers = new Map<string, ManagedContainer>();
@@ -94,6 +115,8 @@ export class ContainerLifecycleManager {
     this.shutdownTimeoutMs = options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
     this.networkName = options.networkName;
     this.logger = options.logger ?? createLogger('lifecycle');
+    this.eventBus = options.eventBus;
+    this.claudeSessionStore = options.claudeSessionStore;
   }
 
   /**
@@ -126,7 +149,7 @@ export class ContainerLifecycleManager {
           containerPath: CONTAINER_SOCKET_PATH,
         },
       ],
-      env: { ...request.env },
+      env: this.buildContainerEnv(request.env),
       stdinData: request.stdinData,
     };
 
@@ -140,6 +163,9 @@ export class ContainerLifecycleManager {
 
     const managed: ManagedContainer = { handle, session };
     this.containers.set(session.sessionId, managed);
+
+    // Start output reader for streaming stdout → EventBus pipeline
+    this.startOutputReader(handle, session, request.group);
 
     this.logger.info('container spawned', {
       group: request.group,
@@ -285,7 +311,54 @@ export class ContainerLifecycleManager {
       });
     }
 
+    if (request.claudeStatePath) {
+      volumes.push({
+        source: request.claudeStatePath,
+        target: CONTAINER_CLAUDE_STATE_PATH,
+        readonly: false,
+      });
+    }
+
     return volumes;
+  }
+
+  /**
+   * Build container env by mapping internal env var names to container-facing names.
+   * CARAPACE_RESUME_SESSION_ID (internal) → CARAPACE_RESUME_SESSION (container).
+   */
+  private buildContainerEnv(env?: Record<string, string>): Record<string, string> {
+    if (!env) return {};
+
+    const containerEnv = { ...env };
+
+    if (containerEnv['CARAPACE_RESUME_SESSION_ID']) {
+      containerEnv['CARAPACE_RESUME_SESSION'] = containerEnv['CARAPACE_RESUME_SESSION_ID'];
+      delete containerEnv['CARAPACE_RESUME_SESSION_ID'];
+    }
+
+    return containerEnv;
+  }
+
+  /**
+   * Start a ContainerOutputReader on the handle's stdout if all deps are available.
+   * Fire-and-forget — the reader runs until the stream ends.
+   */
+  private startOutputReader(handle: ContainerHandle, session: Session, group: string): void {
+    if (!handle.stdout || !this.eventBus || !this.claudeSessionStore) {
+      return;
+    }
+
+    const reader = new ContainerOutputReader({
+      eventBus: this.eventBus,
+      claudeSessionStore: this.claudeSessionStore,
+      logger: this.logger,
+    });
+
+    reader.start(handle.stdout, {
+      sessionId: session.sessionId,
+      group,
+      containerId: handle.id,
+    });
   }
 
   /** Attempt a graceful stop with a timeout. Rejects if timeout expires. */

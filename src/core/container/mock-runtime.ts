@@ -49,6 +49,8 @@ export class MockContainerRuntime implements ContainerRuntime {
   private availableError: Error | null = null;
   private nextRunFailure: string | null = null;
   private nextStopTimeout = false;
+  private nextStdout: NodeJS.ReadableStream | null = null;
+  private nextStderr: NodeJS.ReadableStream | null = null;
 
   constructor(name: RuntimeName = 'docker') {
     this.name = name;
@@ -111,7 +113,12 @@ export class MockContainerRuntime implements ContainerRuntime {
       id: `mock-${this.idCounter}`,
       name: options.name ?? `mock-container-${this.idCounter}`,
       runtime: this.name,
+      stdout: this.nextStdout ?? undefined,
+      stderr: this.nextStderr ?? undefined,
     };
+
+    this.nextStdout = null;
+    this.nextStderr = null;
 
     const state: ContainerState = {
       status: 'running',
@@ -205,6 +212,14 @@ export class MockContainerRuntime implements ContainerRuntime {
     }
   }
 
+  /**
+   * Make the next `run()` call return a handle with stdout/stderr streams.
+   */
+  simulateStdout(stdout: NodeJS.ReadableStream, stderr?: NodeJS.ReadableStream): void {
+    this.nextStdout = stdout;
+    this.nextStderr = stderr ?? null;
+  }
+
   // -----------------------------------------------------------------------
   // Inspection helpers (test-only)
   // -----------------------------------------------------------------------
@@ -225,5 +240,7 @@ export class MockContainerRuntime implements ContainerRuntime {
     this.availableError = null;
     this.nextRunFailure = null;
     this.nextStopTimeout = false;
+    this.nextStdout = null;
+    this.nextStderr = null;
   }
 }
