@@ -190,6 +190,8 @@ function createStartServer(
     promptsDir,
     credentialsDir,
     containerImage: readCurrentImageTag(home),
+    claudeStateDir: join(home, 'data', 'claude-state'),
+    sessionDbPath: join(home, 'data', 'claude-sessions.sqlite'),
   };
 
   const deps: ServerDeps = {
