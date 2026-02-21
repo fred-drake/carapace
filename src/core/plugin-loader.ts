@@ -29,6 +29,7 @@ import type {
   PluginSource,
 } from './plugin-handler.js';
 import type { EventBus } from './event-bus.js';
+import { createLogger, type Logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -65,6 +66,7 @@ export class PluginLoader {
   private readonly builtinPluginsDir: string | undefined;
   private readonly initTimeoutMs: number;
   private readonly eventBus: EventBus | undefined;
+  private readonly logger: Logger;
   private readonly loadedHandlers: Map<string, PluginHandler> = new Map();
 
   constructor(opts: {
@@ -73,12 +75,14 @@ export class PluginLoader {
     builtinPluginsDir?: string;
     initTimeoutMs?: number;
     eventBus?: EventBus;
+    logger?: Logger;
   }) {
     this.toolCatalog = opts.toolCatalog;
     this.userPluginsDir = opts.userPluginsDir;
     this.builtinPluginsDir = opts.builtinPluginsDir;
     this.initTimeoutMs = opts.initTimeoutMs ?? 10_000;
     this.eventBus = opts.eventBus;
+    this.logger = opts.logger ?? createLogger('plugin-loader');
   }
 
   // -------------------------------------------------------------------------
@@ -169,11 +173,14 @@ export class PluginLoader {
   async loadPlugin(pluginDir: string, source: PluginSource = 'user'): Promise<PluginLoadResult> {
     const pluginName = basename(pluginDir);
 
+    this.logger.info('loading plugin', { pluginName, source });
+
     // 1. Read manifest
     let rawManifest: string;
     try {
       rawManifest = await readFile(join(pluginDir, 'manifest.json'), 'utf-8');
     } catch {
+      this.logger.warn('plugin load failed', { pluginName, category: 'invalid_manifest' });
       return {
         ok: false,
         pluginName,
@@ -186,6 +193,7 @@ export class PluginLoader {
     try {
       parsed = JSON.parse(rawManifest);
     } catch {
+      this.logger.warn('plugin load failed', { pluginName, category: 'invalid_manifest' });
       return {
         ok: false,
         pluginName,
@@ -200,6 +208,7 @@ export class PluginLoader {
     if (!validate(parsed)) {
       const errors =
         validate.errors?.map((e: ErrorObject) => `${e.instancePath} ${e.message}`).join('; ') ?? '';
+      this.logger.warn('plugin load failed', { pluginName, category: 'invalid_manifest' });
       return {
         ok: false,
         pluginName,
@@ -213,6 +222,11 @@ export class PluginLoader {
     // 3. Check tool name uniqueness + reserved names
     for (const tool of manifest.provides.tools) {
       if (RESERVED_INTRINSIC_NAMES.has(tool.name)) {
+        this.logger.warn('plugin load failed', {
+          pluginName,
+          category: 'invalid_manifest',
+          reason: 'reserved tool name',
+        });
         return {
           ok: false,
           pluginName,
@@ -221,6 +235,11 @@ export class PluginLoader {
         };
       }
       if (this.toolCatalog.has(tool.name)) {
+        this.logger.warn('plugin load failed', {
+          pluginName,
+          category: 'invalid_manifest',
+          reason: 'tool name collision',
+        });
         return {
           ok: false,
           pluginName,
@@ -236,6 +255,7 @@ export class PluginLoader {
       handler = await this.importHandler(pluginDir);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn('plugin load failed', { pluginName, category: 'missing_handler' });
       return {
         ok: false,
         pluginName,
@@ -250,15 +270,18 @@ export class PluginLoader {
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       const isTimeout = message.includes('timed out');
+      const category = isTimeout ? 'timeout' : 'init_error';
+      this.logger.warn('plugin load failed', { pluginName, category });
       return {
         ok: false,
         pluginName,
         error: `Handler initialization failed: ${message}`,
-        category: isTimeout ? 'timeout' : 'init_error',
+        category,
       };
     }
 
     // 6. Register tools in catalog — bridge envelope to handleToolInvocation
+    const toolNames: string[] = [];
     for (const tool of manifest.provides.tools) {
       this.toolCatalog.register(tool, async (envelope) => {
         const toolName = envelope.topic.replace('tool.invoke.', '');
@@ -273,10 +296,12 @@ export class PluginLoader {
         }
         return { error: result.error };
       });
+      toolNames.push(tool.name);
     }
 
     this.loadedHandlers.set(pluginName, handler);
 
+    this.logger.info('plugin loaded', { pluginName, source, tools: toolNames });
     return { ok: true, pluginName, manifest, handler, source };
   }
 
@@ -292,12 +317,18 @@ export class PluginLoader {
    */
   async loadAll(): Promise<PluginLoadResult[]> {
     const discovered = await this.discoverPlugins();
+    this.logger.info('discovered plugins', { count: discovered.length });
+
     const results: PluginLoadResult[] = [];
 
     for (const plugin of discovered) {
       const result = await this.loadPlugin(plugin.dir, plugin.source);
       results.push(result);
     }
+
+    const succeeded = results.filter((r) => r.ok).length;
+    const failed = results.filter((r) => !r.ok).length;
+    this.logger.info('all plugins loaded', { succeeded, failed, total: results.length });
 
     return results;
   }
@@ -314,19 +345,26 @@ export class PluginLoader {
   async shutdownAll(timeoutMs?: number): Promise<void> {
     const timeout = timeoutMs ?? 5_000;
     const entries = [...this.loadedHandlers.entries()];
+    this.logger.info('shutting down all plugins', { count: entries.length });
 
     await Promise.allSettled(
-      entries.map(async ([_name, handler]) => {
-        await Promise.race([
-          handler.shutdown(),
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('shutdown timed out')), timeout),
-          ),
-        ]);
+      entries.map(async ([name, handler]) => {
+        try {
+          await Promise.race([
+            handler.shutdown(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('shutdown timed out')), timeout),
+            ),
+          ]);
+          this.logger.info('plugin shut down', { pluginName: name });
+        } catch {
+          this.logger.warn('plugin shutdown failed', { pluginName: name });
+        }
       }),
     );
 
     this.loadedHandlers.clear();
+    this.logger.info('all plugins shut down');
   }
 
   // -------------------------------------------------------------------------

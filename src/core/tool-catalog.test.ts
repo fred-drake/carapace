@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ToolCatalog } from './tool-catalog.js';
 import type { ToolHandler } from './tool-catalog.js';
 import { createToolDeclaration } from '../testing/factories.js';
+import { configureLogging, resetLogging, type LogEntry, type LogSink } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -82,6 +83,46 @@ describe('ToolCatalog', () => {
       const catalog = new ToolCatalog();
 
       expect(catalog.get('unknown')).toBeUndefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Logging
+  // -----------------------------------------------------------------------
+
+  describe('logging', () => {
+    let logEntries: LogEntry[];
+
+    beforeEach(() => {
+      logEntries = [];
+      const logSink: LogSink = (entry) => logEntries.push(entry);
+      configureLogging({ level: 'debug', sink: logSink });
+    });
+
+    afterEach(() => {
+      resetLogging();
+    });
+
+    it('logs tool registered on register()', () => {
+      const catalog = new ToolCatalog();
+      const tool = createToolDeclaration({ name: 'log_tool' });
+
+      catalog.register(tool, noopHandler);
+
+      const regLog = logEntries.find((e) => e.msg === 'tool registered');
+      expect(regLog).toBeDefined();
+      expect(regLog!.meta?.toolName).toBe('log_tool');
+    });
+
+    it('uses tool-catalog component name', () => {
+      const catalog = new ToolCatalog();
+      const tool = createToolDeclaration({ name: 'comp_tool' });
+
+      catalog.register(tool, noopHandler);
+
+      const regLog = logEntries.find((e) => e.msg === 'tool registered');
+      expect(regLog).toBeDefined();
+      expect(regLog!.component).toBe('tool-catalog');
     });
   });
 });

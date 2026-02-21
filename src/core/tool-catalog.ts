@@ -8,6 +8,7 @@
 
 import type { ToolDeclaration } from '../types/manifest.js';
 import type { RequestEnvelope } from '../types/protocol.js';
+import { createLogger, type Logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Handler type
@@ -34,6 +35,11 @@ interface CatalogEntry {
 
 export class ToolCatalog {
   private readonly entries: Map<string, CatalogEntry> = new Map();
+  private readonly logger: Logger;
+
+  constructor(logger?: Logger) {
+    this.logger = logger ?? createLogger('tool-catalog');
+  }
 
   /**
    * Register a tool with its handler.
@@ -47,6 +53,7 @@ export class ToolCatalog {
       throw new Error(`Tool already registered: "${tool.name}"`);
     }
     this.entries.set(tool.name, { tool, handler });
+    this.logger.debug('tool registered', { toolName: tool.name });
   }
 
   /**

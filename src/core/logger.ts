@@ -17,6 +17,9 @@
  * ```
  */
 
+import { mkdirSync, appendFileSync } from 'node:fs';
+import { dirname } from 'node:path';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -305,4 +308,50 @@ export class ContainerLogRouter {
       });
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// SessionLogSink — per-session JSONL log files
+// ---------------------------------------------------------------------------
+
+/** A LogSink that appends JSONL to a file, with a close() method. */
+export interface SessionLogSink extends LogSink {
+  (entry: LogEntry): void;
+  close(): void;
+}
+
+/**
+ * Create a LogSink that appends JSONL to a file at the given path.
+ *
+ * Used for per-session log files at `data/logs/{group}/{sessionId}.jsonl`.
+ * Created when a container is spawned, closed on shutdown.
+ *
+ * @param filePath - Absolute path to the JSONL log file.
+ * @param fs - Optional filesystem abstraction for testing.
+ */
+export function createSessionLogSink(
+  filePath: string,
+  fs?: {
+    mkdirSync: (path: string, options: { recursive: boolean }) => void;
+    appendFileSync: (path: string, data: string) => void;
+  },
+): SessionLogSink {
+  const fsMkdir = fs?.mkdirSync ?? mkdirSync;
+  const fsAppend = fs?.appendFileSync ?? appendFileSync;
+
+  // Ensure parent directory exists
+  fsMkdir(dirname(filePath), { recursive: true });
+
+  let closed = false;
+
+  const sink = ((entry: LogEntry): void => {
+    if (closed) return;
+    fsAppend(filePath, JSON.stringify(entry) + '\n');
+  }) as SessionLogSink;
+
+  sink.close = () => {
+    closed = true;
+  };
+
+  return sink;
 }
