@@ -27,6 +27,7 @@ import {
   type CredentialInfo,
 } from './auth-command.js';
 import { isImageCurrent } from './core/image-identity.js';
+import { runPrompt, type PromptDeps } from './prompt-command.js';
 
 // ---------------------------------------------------------------------------
 // CLI dependency injection
@@ -120,6 +121,8 @@ export interface CliDeps {
   projectRoot?: string;
   /** Default image name to check/use. */
   imageName?: string;
+  /** Create a directory (recursive). */
+  ensureDir?: (path: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,31 +134,46 @@ export interface ParsedArgs {
   command: string;
   subcommand: string;
   flags: Record<string, boolean>;
+  /** Key=value options parsed from --key=value syntax. */
+  options: Record<string, string>;
+  /** All positional arguments after the command. */
+  positionals: string[];
 }
 
 /**
- * Parse process.argv into a command, optional subcommand, and flags.
+ * Parse process.argv into a command, optional subcommand, flags, options,
+ * and positional arguments.
  *
- * Expects argv in the form: [node, script, command?, subcommand?, ...flags]
- * For commands with subcommands (e.g. `auth api-key`), both are captured.
+ * Expects argv in the form: [node, script, command?, ...args]
+ * For commands with subcommands (e.g. `auth api-key`), subcommand is positionals[0].
+ * Supports --flag (boolean) and --key=value (string option) syntax.
  */
 export function parseArgs(argv: string[]): ParsedArgs {
   const args = argv.slice(2);
   const flags: Record<string, boolean> = {};
+  const options: Record<string, string> = {};
+  const positionals: string[] = [];
   let command = '';
-  let subcommand = '';
 
   for (const arg of args) {
     if (arg.startsWith('--')) {
-      flags[arg.slice(2)] = true;
+      const name = arg.slice(2);
+      const eqIdx = name.indexOf('=');
+      if (eqIdx > 0) {
+        options[name.slice(0, eqIdx)] = name.slice(eqIdx + 1);
+      } else {
+        flags[name] = true;
+      }
     } else if (!command) {
       command = arg;
-    } else if (!subcommand) {
-      subcommand = arg;
+    } else {
+      positionals.push(arg);
     }
   }
 
-  return { command, subcommand, flags };
+  const subcommand = positionals[0] ?? '';
+
+  return { command, subcommand, flags, options, positionals };
 }
 
 // ---------------------------------------------------------------------------
@@ -169,16 +187,18 @@ Commands:
   stop             Gracefully shut down
   status           Show whether Carapace is running
   doctor           Check dependencies and configuration
+  prompt "text"    Submit a prompt to a running Carapace agent
   uninstall        Remove Carapace installation
   auth api-key     Configure Anthropic API key
   auth login       Configure OAuth token
   auth status      Show credential status
 
 Options:
-  --version    Show version number
-  --help       Show this help message
-  --yes        Skip confirmation prompts (uninstall)
-  --dry-run    Show what would be done without acting (uninstall)`;
+  --version        Show version number
+  --help           Show this help message
+  --yes            Skip confirmation prompts (uninstall)
+  --dry-run        Show what would be done without acting (uninstall)
+  --group=NAME     Target group for prompt (default: "default")`;
 
 /**
  * Dispatch a command string to the appropriate handler.
@@ -190,6 +210,8 @@ export async function runCommand(
   deps: CliDeps,
   flags?: Record<string, boolean>,
   subcommand?: string,
+  options?: Record<string, string>,
+  positionals?: string[],
 ): Promise<number> {
   if (command === '--version') {
     deps.stdout(VERSION);
@@ -210,6 +232,8 @@ export async function runCommand(
       return status(deps);
     case 'doctor':
       return doctor(deps);
+    case 'prompt':
+      return prompt(deps, options ?? {}, positionals ?? []);
     case 'uninstall':
       return uninstall(deps, flags ?? {});
     case 'auth':
@@ -495,6 +519,37 @@ export async function auth(deps: CliDeps, subcommand: string): Promise<number> {
       deps.stdout(AUTH_USAGE);
       return subcommand ? 1 : 0;
   }
+}
+
+// ---------------------------------------------------------------------------
+// prompt
+// ---------------------------------------------------------------------------
+
+/**
+ * Submit a prompt to a running Carapace agent.
+ *
+ * Writes a task.triggered event file to the prompts directory for the
+ * server to pick up and dispatch.
+ */
+export async function prompt(
+  deps: CliDeps,
+  options: Record<string, string>,
+  positionals: string[],
+): Promise<number> {
+  const promptText = positionals.join(' ').trim();
+  const group = options['group'] ?? 'default';
+
+  const promptDeps: PromptDeps = {
+    stdout: deps.stdout,
+    stderr: deps.stderr,
+    home: deps.home,
+    readPidFile: deps.readPidFile,
+    processExists: deps.processExists,
+    writeFile: deps.writeFile,
+    ensureDir: deps.ensureDir ?? (() => {}),
+  };
+
+  return runPrompt(promptDeps, promptText, group);
 }
 
 // ---------------------------------------------------------------------------

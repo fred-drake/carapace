@@ -176,15 +176,24 @@ function createStartServer(home: string): {
 } {
   const socketDir = join(home, 'run', 'sockets');
   const pluginsDir = join(home, 'plugins');
+  const promptsDir = join(home, 'run', 'prompts');
 
   const config: ServerConfig = {
     socketDir,
     pluginsDir,
+    promptsDir,
   };
 
   const deps: ServerDeps = {
     socketFactory: new ZmqSocketFactory(),
     output: (msg: string) => process.stdout.write(`${msg}\n`),
+    promptFs: {
+      readdirSync: (dir: string) => readdirSync(dir) as string[],
+      readFileSync: (path: string) => readFileSync(path, 'utf-8'),
+      unlinkSync: (path: string) => unlinkSync(path),
+      existsSync: (path: string) => existsSync(path),
+      mkdirSync: (path: string, opts?: { recursive?: boolean }) => mkdirSync(path, opts),
+    },
   };
 
   const server = new Server(config, deps);
@@ -274,7 +283,7 @@ function detectProjectRoot(): string | undefined {
  * @returns Exit code (0 = success, non-zero = failure).
  */
 export async function main(argv: string[] = process.argv): Promise<number> {
-  const { command: parsedCommand, subcommand, flags } = parseArgs(argv);
+  const { command: parsedCommand, subcommand, flags, options, positionals } = parseArgs(argv);
   const home = resolveHome();
 
   // Translate flags to pseudo-commands for runCommand compatibility
@@ -350,6 +359,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
       }
     },
     startServer: () => createStartServer(home),
+    ensureDir: (path: string) => mkdirSync(path, { recursive: true }),
 
     // Image versioning — only wired when Dockerfile and runtime are available
     ...(runtime && projectRoot
@@ -386,7 +396,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
       : {}),
   };
 
-  return runCommand(command, deps, flags, subcommand);
+  return runCommand(command, deps, flags, subcommand, options, positionals);
 }
 
 // ---------------------------------------------------------------------------

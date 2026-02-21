@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { parseArgs, runCommand, doctor, start, stop, status, uninstall, auth } from './cli.js';
+import {
+  parseArgs,
+  runCommand,
+  doctor,
+  start,
+  stop,
+  status,
+  uninstall,
+  auth,
+  prompt,
+} from './cli.js';
 import { MockContainerRuntime } from './core/container/mock-runtime.js';
 import type { CliDeps } from './cli.js';
 
@@ -811,5 +821,128 @@ describe('start image staleness check', () => {
     expect(buildImage).not.toHaveBeenCalled();
     expect(deps.ensureDirs).toHaveBeenCalled();
     expect(code).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseArgs — options and positionals
+// ---------------------------------------------------------------------------
+
+describe('parseArgs — options and positionals', () => {
+  it('parses --key=value as an option', () => {
+    const result = parseArgs(['node', 'carapace', 'prompt', '--group=email', 'hello']);
+    expect(result.options['group']).toBe('email');
+  });
+
+  it('collects all positionals after command', () => {
+    const result = parseArgs(['node', 'carapace', 'prompt', 'summarize', 'my', 'emails']);
+    expect(result.positionals).toEqual(['summarize', 'my', 'emails']);
+  });
+
+  it('derives subcommand from first positional', () => {
+    const result = parseArgs(['node', 'carapace', 'prompt', 'hello world']);
+    expect(result.subcommand).toBe('hello world');
+  });
+
+  it('returns empty positionals when only command given', () => {
+    const result = parseArgs(['node', 'carapace', 'start']);
+    expect(result.positionals).toEqual([]);
+  });
+
+  it('returns empty options when no --key=value present', () => {
+    const result = parseArgs(['node', 'carapace', 'start']);
+    expect(result.options).toEqual({});
+  });
+
+  it('handles mix of flags and options', () => {
+    const result = parseArgs(['node', 'carapace', 'prompt', '--wait', '--group=slack', 'hello']);
+    expect(result.flags['wait']).toBe(true);
+    expect(result.options['group']).toBe('slack');
+    expect(result.positionals).toEqual(['hello']);
+  });
+
+  it('preserves backward compat for auth subcommand', () => {
+    const result = parseArgs(['node', 'carapace', 'auth', 'api-key']);
+    expect(result.command).toBe('auth');
+    expect(result.subcommand).toBe('api-key');
+    expect(result.positionals).toEqual(['api-key']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// prompt
+// ---------------------------------------------------------------------------
+
+describe('prompt', () => {
+  it('dispatches to prompt command via runCommand', async () => {
+    const deps = createTestDeps({
+      readPidFile: vi.fn().mockReturnValue(12345),
+      processExists: vi.fn().mockReturnValue(true),
+      ensureDir: vi.fn(),
+    });
+    const code = await runCommand('prompt', deps, {}, '', {}, ['do something']);
+    expect(code).toBe(0);
+    expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('Prompt submitted'));
+  });
+
+  it('shows prompt in usage text', async () => {
+    const deps = createTestDeps();
+    await runCommand('', deps);
+    expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('prompt'));
+  });
+
+  it('returns 1 with no prompt text', async () => {
+    const deps = createTestDeps({
+      readPidFile: vi.fn().mockReturnValue(12345),
+      processExists: vi.fn().mockReturnValue(true),
+    });
+    const code = await runCommand('prompt', deps, {}, '', {}, []);
+    expect(code).toBe(1);
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('Usage'));
+  });
+
+  it('passes --group option to prompt command', async () => {
+    const deps = createTestDeps({
+      readPidFile: vi.fn().mockReturnValue(12345),
+      processExists: vi.fn().mockReturnValue(true),
+      ensureDir: vi.fn(),
+    });
+    const code = await prompt(deps, { group: 'slack' }, ['check messages']);
+    expect(code).toBe(0);
+    expect(deps.stdout).toHaveBeenCalledWith('  Group: slack');
+  });
+
+  it('defaults group to "default" when not specified', async () => {
+    const deps = createTestDeps({
+      readPidFile: vi.fn().mockReturnValue(12345),
+      processExists: vi.fn().mockReturnValue(true),
+      ensureDir: vi.fn(),
+    });
+    const code = await prompt(deps, {}, ['hello']);
+    expect(code).toBe(0);
+    expect(deps.stdout).toHaveBeenCalledWith('  Group: default');
+  });
+
+  it('returns 1 when carapace is not running', async () => {
+    const deps = createTestDeps({
+      readPidFile: vi.fn().mockReturnValue(null),
+    });
+    const code = await prompt(deps, {}, ['hello']);
+    expect(code).toBe(1);
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('not running'));
+  });
+
+  it('joins multiple positionals into prompt text', async () => {
+    const deps = createTestDeps({
+      readPidFile: vi.fn().mockReturnValue(12345),
+      processExists: vi.fn().mockReturnValue(true),
+      ensureDir: vi.fn(),
+    });
+    await prompt(deps, {}, ['summarize', 'my', 'emails']);
+    // The written file should contain the joined prompt
+    const content = JSON.parse(
+      (deps.writeFile as ReturnType<typeof vi.fn>).mock.calls[0][1] as string,
+    );
+    expect(content.payload.prompt).toBe('summarize my emails');
   });
 });

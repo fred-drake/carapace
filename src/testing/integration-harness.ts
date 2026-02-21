@@ -72,7 +72,7 @@ import { TestInputHandler } from '../plugins/test-input/handler.js';
  * connects to an address where a PUB is bound, it's automatically wired.
  * Same for DEALER → ROUTER.
  */
-class AutoWiringSocketFactory implements SocketFactory {
+export class AutoWiringSocketFactory implements SocketFactory {
   private readonly publishers: FakePubSocket[] = [];
   private readonly subscribers: FakeSubSocket[] = [];
   private readonly routers: FakeRouterSocket[] = [];

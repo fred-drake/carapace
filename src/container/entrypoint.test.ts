@@ -16,6 +16,7 @@ const ENTRYPOINT_PATH = path.resolve(__dirname, 'entrypoint.sh');
 async function runEntrypointWithStdin(
   stdin: string,
   extraArgs: string[] = [],
+  extraEnv: Record<string, string> = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const testScript = `#!/bin/sh
 set -eu
@@ -42,7 +43,7 @@ exec sh "${ENTRYPOINT_PATH}" ${extraArgs.map((a) => `"${a}"`).join(' ')}
       {
         encoding: 'utf-8',
         timeout: 5000,
-        env: { ...process.env, ENTRYPOINT_PATH },
+        env: { ...process.env, ENTRYPOINT_PATH, ...extraEnv },
         maxBuffer: 1024 * 1024,
       },
       (err, stdout, stderr) => {
@@ -105,5 +106,56 @@ describe('entrypoint.sh', () => {
     const result = await runEntrypointWithStdin(stdin);
     expect(result.stdout).toContain('API_KEY=real');
     expect(result.stdout).not.toContain('should_not_appear');
+  });
+
+  // -------------------------------------------------------------------------
+  // CARAPACE_TASK_PROMPT tests
+  // -------------------------------------------------------------------------
+
+  it('passes -p flag with CARAPACE_TASK_PROMPT when set', async () => {
+    const result = await runEntrypointWithStdin('\n', [], {
+      CARAPACE_TASK_PROMPT: 'Summarize my emails',
+    });
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).toContain('--dangerously-skip-permissions');
+    expect(args).toContain('-p');
+    expect(args).toContain('Summarize my emails');
+  });
+
+  it('starts interactive mode when CARAPACE_TASK_PROMPT is not set', async () => {
+    const result = await runEntrypointWithStdin('\n');
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).toContain('--dangerously-skip-permissions');
+    // Ensure -p flag is NOT present (distinct from --dangerously-skip-permissions which contains "-p")
+    expect(args).not.toMatch(/\s-p\s|^-p\s|\s-p$/);
+  });
+
+  it('starts interactive mode when CARAPACE_TASK_PROMPT is empty', async () => {
+    const result = await runEntrypointWithStdin('\n', [], {
+      CARAPACE_TASK_PROMPT: '',
+    });
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).toContain('--dangerously-skip-permissions');
+    expect(args).not.toMatch(/\s-p\s|^-p\s|\s-p$/);
+  });
+
+  it('handles task prompt with special characters', async () => {
+    const prompt = 'Check $HOME and "quotes" and `backticks`';
+    const result = await runEntrypointWithStdin('\n', [], {
+      CARAPACE_TASK_PROMPT: prompt,
+    });
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).toContain('-p');
+    expect(args).toContain('Check $HOME');
+  });
+
+  it('injects credentials AND passes task prompt together', async () => {
+    const result = await runEntrypointWithStdin('ANTHROPIC_API_KEY=sk-ant-test\n\n', [], {
+      CARAPACE_TASK_PROMPT: 'Do the thing',
+    });
+    expect(result.stdout).toContain('ANTHROPIC_API_KEY=sk-ant-test');
+    const args = result.stdout.split('---ARGS---\n')[1]?.trim() ?? '';
+    expect(args).toContain('-p');
+    expect(args).toContain('Do the thing');
   });
 });

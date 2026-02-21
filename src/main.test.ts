@@ -27,7 +27,14 @@ describe('main', () => {
 
   it('calls runCommand with parsed command and returns exit code', async () => {
     const code = await main(['node', 'carapace', 'doctor']);
-    expect(runCommand).toHaveBeenCalledWith('doctor', expect.any(Object), expect.any(Object), '');
+    expect(runCommand).toHaveBeenCalledWith(
+      'doctor',
+      expect.any(Object),
+      expect.any(Object),
+      '',
+      expect.any(Object),
+      expect.any(Array),
+    );
     expect(code).toBe(0);
   });
 
@@ -38,6 +45,8 @@ describe('main', () => {
       expect.any(Object),
       expect.objectContaining({ version: true }),
       '',
+      expect.any(Object),
+      expect.any(Array),
     );
     expect(code).toBe(0);
   });
@@ -55,6 +64,8 @@ describe('main', () => {
       expect.any(Object),
       expect.any(Object),
       'api-key',
+      expect.any(Object),
+      expect.any(Array),
     );
     expect(code).toBe(0);
   });
