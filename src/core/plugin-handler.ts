@@ -72,11 +72,35 @@ export interface AuditLogEntry {
  * Services provided by the core to plugins during initialization.
  * All methods are automatically scoped to the current request's group
  * by the core — handlers never pass group or session identifiers.
+ *
+ * Plugins that declare `provides.channels` in their manifest receive
+ * {@link ChannelServices} (which extends this interface) instead.
  */
 export interface CoreServices {
   getAuditLog(filters: AuditLogFilter): Promise<AuditLogEntry[]>;
   getToolCatalog(): ToolDeclaration[];
   getSessionInfo(): SessionInfo;
+}
+
+// ---------------------------------------------------------------------------
+// ChannelServices
+// ---------------------------------------------------------------------------
+
+/**
+ * Extended services provided to channel plugins (those declaring
+ * `provides.channels` in their manifest). Adds the ability to publish
+ * events on the event bus.
+ *
+ * The core fills in `id`, `version`, `timestamp`, and `correlation: null`
+ * from trusted state — the plugin only provides the four fields below.
+ */
+export interface ChannelServices extends CoreServices {
+  publishEvent(partial: {
+    topic: string;
+    source: string;
+    group: string;
+    payload: Record<string, unknown>;
+  }): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

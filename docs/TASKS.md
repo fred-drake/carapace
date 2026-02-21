@@ -12,6 +12,8 @@
 > ENG-28, QA-11, PRs #103-108). End-to-end plumbing validated.
 > Updated (2026-02-19) — Phase IMG image versioning tasks added and completed
 > (IMG-01 through IMG-08, PRs #120-128).
+> Updated (2026-02-20) — Phase INPUT tasks added (INPUT-01 through INPUT-08).
+> Test input plugin for programmatic prompt injection and e2e testing foundation.
 > Organized by priority tier, then by role. Tasks reference each other by ID.
 
 ## Legend
@@ -2257,6 +2259,174 @@ Prevents host/container version skew during development and upgrades.
 
 ---
 
+## Phase INPUT — Test Input Plugin
+
+Programmatic input plugin for testing. Enables sending prompts into Carapace
+to trigger the full flow: input → event bus → session spawn → agent runs →
+tool invocations → response capture. Establishes the pattern all future channel
+plugins (Slack, WhatsApp, email) will follow.
+
+**Architecture**: Test code calls `handler.submit(prompt)` → plugin publishes
+`message.inbound` via `ChannelServices.publishEvent()` → EventDispatcher
+spawns container → agent uses tools → agent calls `test_respond` → plugin
+captures response via `waitForResponse()`.
+
+### INPUT-01: Add ChannelServices interface with publishEvent()
+
+- **Priority**: P1 | **Complexity**: S | **Role**: Engineer
+- Create `ChannelServices extends CoreServices` with `publishEvent()` method.
+  Channel plugins (those declaring `provides.channels` in manifest) receive
+  `ChannelServices` during `initialize()`. Tool-only plugins continue to
+  receive `CoreServices` (read-only). Core fills in `id`, `version`,
+  `timestamp` from trusted state. Add JSDoc on `CoreServices` pointing to
+  `ChannelServices` for discoverability.
+- **Files**: `src/core/plugin-handler.ts`, `src/core/core-services.ts`,
+  `src/core/plugin-loader.ts`
+- **Depends on**: None (prerequisite for all other INPUT tasks)
+- **Acceptance criteria**: ChannelServices interface exported. PluginLoader
+  detects channel plugins and injects ChannelServices. publishEvent()
+  constructs valid EventEnvelope. Unit tests verify distinction.
+
+### INPUT-02: Add message.inbound canonical schema validation in core
+
+- **Priority**: P1 | **Complexity**: S | **Role**: Engineer + Security
+- Define and enforce a canonical JSON Schema for `message.inbound` event
+  payloads at the core level (EventDispatcher). Schema requires: `channel`
+  (string, max 64), `sender` (string, max 256), `content_type` (enum:
+  text/image/file/voice), `body` (string, max 8192). Optional `metadata`
+  object. `additionalProperties: false`. Core validates before processing —
+  defense in depth against malformed events from buggy plugins. Invalid
+  payloads produce structured errors logged via SecureAuditLog.
+- **Files**: `src/core/event-schemas.ts` (new), `src/core/event-dispatcher.ts`,
+  `src/core/schema-validator.ts`
+- **Depends on**: None (parallel with INPUT-01)
+- **Acceptance criteria**: Core rejects malformed message.inbound events.
+  Schema reusable by all future input plugins. Audit log captures rejected
+  events. Unit tests for valid/invalid payloads including oversized body,
+  null bytes, extra fields.
+
+### INPUT-03: Server.getPluginHandler() accessor
+
+- **Priority**: P1 | **Complexity**: XS | **Role**: Engineer
+- Add `getPluginHandler(name: string): PluginHandler | undefined` to Server.
+  Delegates to PluginLoader's handler map. Needed for e2e test code to
+  retrieve handler instances and call programmatic APIs like
+  `TestInputHandler.submit()`.
+- **Files**: `src/core/server.ts`, `src/core/plugin-loader.ts`
+- **Depends on**: None (parallel with INPUT-01, INPUT-02)
+- **Acceptance criteria**: `server.getPluginHandler('test-input')` returns
+  handler instance. Returns undefined for unknown names. Unit test verifies
+  accessor works after server.start().
+
+### INPUT-04: Test input plugin handler + manifest + skill
+
+- **Priority**: P1 | **Complexity**: M | **Role**: Engineer
+- Build the test-input plugin. Produces type stubs first (TDD: red phase),
+  then implementation fills in after INPUT-05 writes failing tests.
+- **Files** (new): `src/plugins/test-input/manifest.json`,
+  `src/plugins/test-input/handler.ts`,
+  `src/plugins/test-input/skills/test-input.md`
+- **Manifest**: `channels: ["test-input"]`, `tools: [test_respond]`,
+  `subscribes: ["agent.completed", "agent.error"]`
+- **Handler API**: `submit(prompt, options?)` publishes `message.inbound`
+  via ChannelServices. `waitForResponse(correlationId, timeout)` blocks
+  until agent calls `test_respond`. `getResponses()` returns captured
+  responses. `reset()` clears state for test isolation.
+- **Security requirements**: Audit log every inbound message via
+  SecureAuditLog. Resolve group from config (not message content). Channel
+  field must match manifest's `provides.channels`.
+- **Skill file**: Context-oriented (tells agent where its prompt came from
+  and how to respond via `test_respond`), not tool-oriented.
+- **Depends on**: INPUT-01, INPUT-02
+- **Acceptance criteria**: Handler implements full PluginHandler interface.
+  submit() publishes valid message.inbound events. test_respond captures
+  and correlates responses. waitForResponse() resolves or times out.
+  reset() provides clean test isolation. Manifest validates.
+
+### INPUT-05: Unit tests for test-input handler (TDD)
+
+- **Priority**: P1 | **Complexity**: M | **Role**: QA + Engineer
+- Write unit tests following strict TDD. Tests written against INPUT-04
+  stubs, then implementation fills in.
+- **File**: `src/plugins/test-input/__tests__/handler.test.ts`
+- **Tests** (16+ cases):
+  1. Handler initializes with ChannelServices
+  2. submit() calls publishEvent with correct message.inbound shape
+  3. submit() returns a correlation ID (UUID)
+  4. submit() uses default group "test" when not specified
+  5. submit() uses custom group when provided
+  6. handleToolInvocation('test_respond') captures response
+  7. handleToolInvocation('test_respond') correlates to submission
+  8. handleToolInvocation returns error for unknown tool
+  9. waitForResponse resolves when test_respond is called
+  10. waitForResponse rejects on timeout
+  11. getResponses() returns all captured responses
+  12. getResponses(correlationId) filters by correlation
+  13. reset() clears all state
+  14. shutdown() cleans up resources
+  15. handleEvent('agent.completed') resolves pending waiters
+  16. handleEvent('agent.error') rejects pending waiters
+- **Depends on**: INPUT-04 (stubs)
+- **Acceptance criteria**: All tests pass. Mock ChannelServices used.
+  Event envelope structure verified. Response correlation validated.
+
+### INPUT-06: Integration tests through pipeline
+
+- **Priority**: P1 | **Complexity**: M | **Role**: QA
+- Integration tests verifying test-input works through the full 6-stage
+  pipeline using IntegrationHarness with FakeSocketFactory.
+- **File**: `src/plugins/test-input/__tests__/integration.test.ts`
+- **Tests**:
+  1. test_respond passes stage 2 topic resolution
+  2. test_respond with valid args passes stage 3 schema validation
+  3. test_respond returns success through full pipeline (all 6 stages)
+  4. test_respond preserves correlation ID
+  5. Response has correct envelope fields (group, source, version, type)
+  6. Missing body field → VALIDATION_FAILED at stage 3
+  7. Extra fields → VALIDATION_FAILED (additionalProperties: false)
+  8. Multiple sequential submissions recorded independently
+  9. Concurrent sessions with different prompts stay isolated
+- **Harness additions**: `registerTestInput()` and `submitPrompt()`
+  convenience methods on IntegrationHarness.
+- **Depends on**: INPUT-04, INPUT-05
+- **Acceptance criteria**: All integration tests pass with fake sockets.
+  Pipeline validation end-to-end. Harness convenience methods ergonomic.
+
+### INPUT-07: E2E test — full input → session → tool → response flow
+
+- **Priority**: P1 | **Complexity**: L | **Role**: QA + Engineer
+- End-to-end test validating the complete flow: test-input submits prompt →
+  event bus → EventDispatcher → container spawn → agent runs → agent calls
+  tools → agent calls test_respond → response captured.
+- **File**: `src/plugins/test-input/__tests__/e2e.test.ts`
+- **Scenarios**:
+  1. Happy path: prompt → agent echoes via test_respond
+  2. Multi-tool chain: prompt → echo tool + test_respond
+  3. Invalid prompt rejected at schema validation
+  4. waitForResponse() pattern validated for test authors
+- **Tagged**: `@e2e` for CI pipeline (runs in e2e-nightly.yml)
+- **Depends on**: INPUT-01 through INPUT-06
+- **Acceptance criteria**: At least one scenario validates full loop.
+  Demonstrates how future plugin authors use test-input for e2e tests.
+  Clean container cleanup after tests.
+
+### INPUT-08: Deferred follow-up tasks (documented)
+
+- **Priority**: P2 | **Complexity**: XS | **Role**: All
+- Document follow-up tasks identified during planning but deferred from
+  this phase:
+  1. Event bus → session spawn wiring in Server
+  2. Input rate limiting interface (per-sender/per-channel)
+  3. `carapace prompt` CLI command for interactive use
+  4. Container prompt injection mechanism (env var vs mounted file)
+  5. Input plugin pattern documentation for future authors
+  6. Concurrency controls (maxConcurrentSessions, session timeout)
+- **Depends on**: INPUT-07
+- **Acceptance criteria**: Each item documented with description, rationale
+  for deferral, and rough scope estimate.
+
+---
+
 ## Task Summary
 
 | Category  |   Count |     P0 |     P1 |     P2 |
@@ -2268,4 +2438,5 @@ Prevents host/container version skew during development and upgrades.
 | DX        |      14 |      0 |      6 |      8 |
 | QA        |      12 |      5 |      3 |      4 |
 | IMG       |       8 |      0 |      6 |      2 |
-| **Total** | **108** | **14** | **55** | **39** |
+| INPUT     |       8 |      0 |      7 |      1 |
+| **Total** | **116** | **14** | **62** | **40** |

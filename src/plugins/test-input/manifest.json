@@ -1,0 +1,29 @@
+{
+  "description": "Test input plugin for programmatic prompt injection and e2e testing",
+  "version": "0.1.0",
+  "app_compat": ">=0.1.0",
+  "author": { "name": "Carapace Core" },
+  "provides": {
+    "channels": ["test-input"],
+    "tools": [
+      {
+        "name": "test_respond",
+        "description": "Respond to a test prompt with a text body. Used by the agent to send its response back to the test harness.",
+        "risk_level": "low",
+        "arguments_schema": {
+          "type": "object",
+          "required": ["body"],
+          "additionalProperties": false,
+          "properties": {
+            "body": {
+              "type": "string",
+              "description": "The response body text",
+              "maxLength": 8192
+            }
+          }
+        }
+      }
+    ]
+  },
+  "subscribes": ["agent.completed", "agent.error"]
+}

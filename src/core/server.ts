@@ -19,6 +19,7 @@ import { RequestChannel } from './request-channel.js';
 import { EventBus } from './event-bus.js';
 import { ToolCatalog } from './tool-catalog.js';
 import { PluginLoader } from './plugin-loader.js';
+import type { PluginHandler } from './plugin-handler.js';
 import { SessionManager } from './session-manager.js';
 import { ResponseSanitizer } from './response-sanitizer.js';
 import { MessageRouter } from './router.js';
@@ -83,6 +84,14 @@ export class Server {
   }
 
   private readonly provisionerFs: SocketFs | undefined;
+
+  /**
+   * Return the loaded plugin handler by directory name, or undefined
+   * if the plugin is not loaded (or the server has not started).
+   */
+  getPluginHandler(name: string): PluginHandler | undefined {
+    return this.pluginLoader?.getHandler(name);
+  }
 
   /**
    * Boot the server:

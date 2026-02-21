@@ -181,4 +181,15 @@ describe('Server', () => {
       expect(server.responseSanitizer).toBeDefined();
     });
   });
+
+  describe('getPluginHandler()', () => {
+    it('returns undefined for unknown plugin name after start()', async () => {
+      await server.start();
+      expect(server.getPluginHandler('unknown')).toBeUndefined();
+    });
+
+    it('returns undefined before start() is called', () => {
+      expect(server.getPluginHandler('anything')).toBeUndefined();
+    });
+  });
 });
