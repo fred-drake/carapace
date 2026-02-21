@@ -23,7 +23,8 @@ import {
   accessSync,
   constants as fsConstants,
 } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -36,9 +37,12 @@ import { loadConfig } from './core/config-loader.js';
 import { DockerRuntime } from './core/container/docker-runtime.js';
 import { PodmanRuntime } from './core/container/podman-runtime.js';
 import { AppleContainerRuntime } from './core/container/apple-container-runtime.js';
+import type { ContainerRuntime } from './core/container/runtime.js';
 import { Server } from './core/server.js';
 import type { ServerConfig, ServerDeps } from './core/server.js';
 import { ZmqSocketFactory } from './core/zmq-socket-factory.js';
+import { resolveGitSha } from './core/image-identity.js';
+import { buildImage as buildImageFn } from './core/image-builder.js';
 
 // ---------------------------------------------------------------------------
 // PID file helpers
@@ -188,6 +192,78 @@ function createStartServer(home: string): {
 }
 
 // ---------------------------------------------------------------------------
+// Image versioning helpers
+// ---------------------------------------------------------------------------
+
+const STABLE_IMAGE_NAME = 'carapace:latest';
+
+function currentImageTagPath(home: string): string {
+  return join(home, 'run', 'current-image');
+}
+
+function readCurrentImageTag(home: string): string {
+  const path = currentImageTagPath(home);
+  if (!existsSync(path)) return STABLE_IMAGE_NAME;
+  const tag = readFileSync(path, 'utf-8').trim();
+  return tag || STABLE_IMAGE_NAME;
+}
+
+function writeCurrentImageTag(home: string, tag: string): void {
+  const dir = join(home, 'run');
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  writeFileSync(currentImageTagPath(home), `${tag}\n`, 'utf-8');
+}
+
+/** CLI binary for each container runtime. */
+function runtimeBinary(name: string): string {
+  switch (name) {
+    case 'docker':
+      return 'docker';
+    case 'podman':
+      return 'podman';
+    case 'apple-container':
+      return 'container';
+    default:
+      return name;
+  }
+}
+
+/** Find the first available container runtime. */
+async function findAvailableRuntime(
+  runtimes: ContainerRuntime[],
+): Promise<ContainerRuntime | undefined> {
+  for (const rt of runtimes) {
+    try {
+      if (await rt.isAvailable()) return rt;
+    } catch {
+      // Skip unavailable runtimes
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Detect project root — the directory containing the Dockerfile.
+ * In development, this is the repo root (parent of dist/).
+ * Returns undefined if no Dockerfile is found.
+ */
+function detectProjectRoot(): string | undefined {
+  // dist/main.js → project root is parent of dist/
+  const distDir = dirname(fileURLToPath(import.meta.url));
+  const projectRoot = dirname(distDir);
+  if (existsSync(join(projectRoot, 'Dockerfile'))) {
+    return projectRoot;
+  }
+  // Also check cwd
+  if (existsSync(join(process.cwd(), 'Dockerfile'))) {
+    return process.cwd();
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
 // main()
 // ---------------------------------------------------------------------------
 
@@ -209,13 +285,19 @@ export async function main(argv: string[] = process.argv): Promise<number> {
     command = '--help';
   }
 
+  const runtimes = [new AppleContainerRuntime(), new PodmanRuntime(), new DockerRuntime()];
+
+  // Wire image versioning deps if a Dockerfile and runtime are available
+  const projectRoot = detectProjectRoot();
+  const runtime = projectRoot ? await findAvailableRuntime(runtimes) : undefined;
+
   const deps: CliDeps = {
     stdout: (msg: string) => process.stdout.write(`${msg}\n`),
     stderr: (msg: string) => process.stderr.write(`${msg}\n`),
     home,
     nodeVersion: process.version,
     platform: process.platform,
-    runtimes: [new AppleContainerRuntime(), new PodmanRuntime(), new DockerRuntime()],
+    runtimes,
     readPidFile: () => readPidFile(home),
     writePidFile: (pid: number) => writePidFile(home, pid),
     removePidFile: () => removePidFile(home),
@@ -268,6 +350,38 @@ export async function main(argv: string[] = process.argv): Promise<number> {
       }
     },
     startServer: () => createStartServer(home),
+
+    // Image versioning — only wired when Dockerfile and runtime are available
+    ...(runtime && projectRoot
+      ? {
+          imageName: readCurrentImageTag(home),
+          resolveGitSha: () => resolveGitSha(exec),
+          inspectImageLabels: (image: string) => runtime.inspectLabels(image),
+          projectRoot,
+          buildImage: async (contextDir: string) => {
+            const identity = await buildImageFn(
+              {
+                runtime,
+                exec,
+                readPackageVersion: () => {
+                  const pkg = JSON.parse(readFileSync(join(contextDir, 'package.json'), 'utf-8'));
+                  return pkg.version ?? '0.0.0';
+                },
+              },
+              contextDir,
+            );
+            // Persist composite tag so future staleness checks find it
+            writeCurrentImageTag(home, identity.tag);
+            // Also tag with stable name (best effort — not all runtimes support it)
+            try {
+              await exec(runtimeBinary(runtime.name), ['tag', identity.tag, STABLE_IMAGE_NAME]);
+            } catch {
+              // Apple Containers doesn't have a tag command — the persisted file handles this
+            }
+            return identity;
+          },
+        }
+      : {}),
   };
 
   return runCommand(command, deps, flags, subcommand);

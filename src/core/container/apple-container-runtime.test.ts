@@ -448,19 +448,30 @@ describe('AppleContainerRuntime', () => {
 
   describe('build', () => {
     it('builds with just tag and contextDir', async () => {
+      const inspectResponse = JSON.stringify([{ index: { digest: 'sha256:abc123' } }]);
       mock.handler.mockResolvedValueOnce({ stdout: 'build output\n', stderr: '' });
-      mock.handler.mockResolvedValueOnce({ stdout: 'sha256:abc123\n', stderr: '' });
+      mock.handler.mockResolvedValueOnce({ stdout: inspectResponse, stderr: '' });
 
       const id = await runtime.build({ tag: 'carapace:latest', contextDir: '/src' });
 
       expect(id).toBe('sha256:abc123');
-      expect(mock.calls[0].args).toEqual(['build', '-t', 'carapace:latest', '/src']);
-      expect(mock.calls[1].args).toEqual(['images', '-q', 'carapace:latest']);
+      expect(mock.calls[0].args).toEqual([
+        'build',
+        '-t',
+        'carapace:latest',
+        '--dns',
+        '1.1.1.1',
+        '--dns',
+        '8.8.8.8',
+        '/src',
+      ]);
+      expect(mock.calls[1].args).toEqual(['image', 'inspect', 'carapace:latest']);
     });
 
     it('builds with dockerfile, buildArgs, and labels', async () => {
+      const inspectResponse = JSON.stringify([{ index: { digest: 'sha256:def456' } }]);
       mock.handler.mockResolvedValueOnce({ stdout: '', stderr: '' });
-      mock.handler.mockResolvedValueOnce({ stdout: 'sha256:def456\n', stderr: '' });
+      mock.handler.mockResolvedValueOnce({ stdout: inspectResponse, stderr: '' });
 
       const id = await runtime.build({
         tag: 'carapace:v2',
@@ -494,25 +505,31 @@ describe('AppleContainerRuntime', () => {
   // -----------------------------------------------------------------------
 
   describe('inspectLabels', () => {
-    it('returns parsed labels', async () => {
-      mock.handler.mockResolvedValueOnce({
-        stdout: JSON.stringify({ 'com.carapace.version': '1.0', 'com.carapace.commit': 'abc123' }),
-        stderr: '',
-      });
+    it('returns parsed labels from Apple Containers inspect format', async () => {
+      const inspectResponse = JSON.stringify([
+        {
+          variants: [
+            {
+              config: {
+                config: {
+                  Labels: { 'com.carapace.version': '1.0', 'com.carapace.commit': 'abc123' },
+                },
+              },
+            },
+          ],
+        },
+      ]);
+      mock.handler.mockResolvedValueOnce({ stdout: inspectResponse, stderr: '' });
 
       const labels = await runtime.inspectLabels('carapace:latest');
 
       expect(labels).toEqual({ 'com.carapace.version': '1.0', 'com.carapace.commit': 'abc123' });
-      expect(mock.calls[0].args).toEqual([
-        'inspect',
-        '--format',
-        '{{json .Config.Labels}}',
-        'carapace:latest',
-      ]);
+      expect(mock.calls[0].args).toEqual(['image', 'inspect', 'carapace:latest']);
     });
 
     it('returns empty object when no labels', async () => {
-      mock.handler.mockResolvedValueOnce({ stdout: 'null', stderr: '' });
+      const inspectResponse = JSON.stringify([{ variants: [{ config: { config: {} } }] }]);
+      mock.handler.mockResolvedValueOnce({ stdout: inspectResponse, stderr: '' });
 
       const labels = await runtime.inspectLabels('carapace:latest');
 
