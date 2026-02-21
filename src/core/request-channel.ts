@@ -17,6 +17,7 @@
 
 import type { WireMessage, ResponseEnvelope } from '../types/protocol.js';
 import type { RouterSocket, SocketFactory } from '../types/socket.js';
+import { createLogger, type Logger } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -71,14 +72,16 @@ export type TimeoutHandler = (correlation: string, connectionIdentity: string) =
 export class RequestChannel {
   private readonly factory: SocketFactory;
   private readonly timeoutMs: number;
+  private readonly logger: Logger;
   private socket: RouterSocket | null = null;
   private handler: RequestHandler | null = null;
   private timeoutHandler: TimeoutHandler | null = null;
   private readonly pending: Map<string, PendingRequest> = new Map();
 
-  constructor(factory: SocketFactory, options?: RequestChannelOptions) {
+  constructor(factory: SocketFactory, options?: RequestChannelOptions, logger?: Logger) {
     this.factory = factory;
     this.timeoutMs = options?.timeoutMs ?? 30_000;
+    this.logger = logger ?? createLogger('request-channel');
   }
 
   /**
@@ -94,6 +97,7 @@ export class RequestChannel {
 
     this.socket = this.factory.createRouter();
     await this.socket.bind(address);
+    this.logger.info('ROUTER socket bound', { address });
 
     this.socket.on('message', (identity: Buffer, delimiter: Buffer, payload: Buffer) => {
       this.handleIncoming(identity, delimiter, payload);
@@ -162,6 +166,7 @@ export class RequestChannel {
     const payloadBuffer = Buffer.from(JSON.stringify(response));
 
     await this.socket.send(identityBuffer, delimiter, payloadBuffer);
+    this.logger.debug('response sent', { correlation, topic: response.topic });
   }
 
   /**
@@ -183,6 +188,7 @@ export class RequestChannel {
 
     this.handler = null;
     this.timeoutHandler = null;
+    this.logger.info('request channel closed');
   }
 
   /** Number of in-flight (pending) correlations. Useful for diagnostics. */
@@ -207,15 +213,18 @@ export class RequestChannel {
     try {
       wireMessage = JSON.parse(payload.toString()) as WireMessage;
     } catch {
-      // Malformed JSON — nothing to route back to, silently drop.
+      // Malformed JSON — nothing to route back to
+      this.logger.warn('malformed JSON dropped', { connectionIdentity });
       return;
     }
 
     const correlation = wireMessage.correlation;
+    this.logger.debug('frame received', { correlation, topic: wireMessage.topic });
 
     // Register pending correlation with timeout
     const timer = setTimeout(() => {
       this.pending.delete(correlation);
+      this.logger.warn('request timed out', { correlation, connectionIdentity });
       if (this.timeoutHandler) {
         this.timeoutHandler(correlation, connectionIdentity);
       }
