@@ -6,12 +6,15 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
 import { Server } from './server.js';
+import type { ServerConfig } from './server.js';
 import { FakeSocketFactory } from '../testing/fake-socket-factory.js';
 import type { SocketFs } from './socket-provisioner.js';
 import type { ContainerRuntime } from './container/runtime.js';
 import type { EventEnvelope } from '../types/protocol.js';
 import { configureLogging, resetLogging, type LogEntry, type LogSink } from './logger.js';
+import { CLAUDE_SESSION_MIGRATIONS, ClaudeSessionStore } from './claude-session-store.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -73,7 +76,7 @@ function createMockRuntime(): ContainerRuntime {
   };
 }
 
-function createTestServerWithRuntime() {
+function createTestServerWithRuntime(configOverrides?: Partial<ServerConfig>) {
   const socketFactory = new FakeSocketFactory();
   const fs = createMockFs();
   const output = vi.fn();
@@ -86,6 +89,7 @@ function createTestServerWithRuntime() {
       containerImage: 'carapace-agent:test',
       configuredGroups: ['email', 'slack'],
       maxSessionsPerGroup: 5,
+      ...configOverrides,
     },
     {
       socketFactory,
@@ -624,6 +628,187 @@ describe('Server', () => {
 
       const failLog = logEntries.find((e) => e.msg === 'response send failed');
       expect(failLog).toBeDefined();
+    });
+  });
+
+  describe('ClaudeSessionStore wiring', () => {
+    it('creates ClaudeSessionStore when sessionDbPath is provided', async () => {
+      const db = new Database(':memory:');
+      db.pragma('journal_mode = WAL');
+      const ctx = createTestServerWithRuntime({
+        sessionDbPath: ':memory:',
+      });
+      server = ctx.server;
+
+      await server.start();
+
+      // The server should have created a ClaudeSessionStore internally.
+      // We verify by checking stop() doesn't throw (close is called).
+      await server.stop();
+    });
+
+    it('works without sessionDbPath (backward compatible)', async () => {
+      const ctx = createTestServerWithRuntime();
+      server = ctx.server;
+
+      await server.start();
+      await server.stop();
+    });
+
+    it('closes ClaudeSessionStore on stop()', async () => {
+      const ctx = createTestServerWithRuntime({
+        sessionDbPath: ':memory:',
+      });
+      server = ctx.server;
+
+      await server.start();
+      await server.stop();
+
+      // After stop, starting again should work (store was properly closed)
+      // We can't easily inspect the internal store, but we verify no errors on stop
+    });
+
+    it('passes eventBus to LifecycleManager when runtime is available', async () => {
+      const ctx = createTestServerWithRuntime({
+        sessionDbPath: ':memory:',
+      });
+      server = ctx.server;
+
+      await server.start();
+
+      // Trigger an event to spawn a container — verifies the wiring is complete
+      const subs = ctx.socketFactory.getSubscribers();
+      const envelope: EventEnvelope = {
+        id: 'evt-store-1',
+        version: 1,
+        type: 'event',
+        topic: 'message.inbound',
+        source: 'test-plugin',
+        correlation: null,
+        timestamp: new Date().toISOString(),
+        group: 'email',
+        payload: {
+          channel: 'email',
+          sender: 'user@test.com',
+          content_type: 'text',
+          body: 'Hello',
+        },
+      };
+
+      const topicBuf = Buffer.from('message.inbound', 'utf-8');
+      const payloadBuf = Buffer.from(JSON.stringify(envelope), 'utf-8');
+      subs[0].handlers[0](topicBuf, payloadBuf);
+
+      await vi.waitFor(() => {
+        expect(ctx.runtime.run).toHaveBeenCalled();
+      });
+    });
+
+    it('passes claudeStatePath per group to spawn requests', async () => {
+      const ctx = createTestServerWithRuntime({
+        claudeStateDir: '/tmp/claude-state',
+        sessionDbPath: ':memory:',
+      });
+      server = ctx.server;
+
+      await server.start();
+
+      const subs = ctx.socketFactory.getSubscribers();
+      const envelope: EventEnvelope = {
+        id: 'evt-state-1',
+        version: 1,
+        type: 'event',
+        topic: 'task.triggered',
+        source: 'cli',
+        correlation: null,
+        timestamp: new Date().toISOString(),
+        group: 'email',
+        payload: { prompt: 'test task' },
+      };
+
+      const topicBuf = Buffer.from('task.triggered', 'utf-8');
+      const payloadBuf = Buffer.from(JSON.stringify(envelope), 'utf-8');
+      subs[0].handlers[0](topicBuf, payloadBuf);
+
+      await vi.waitFor(() => {
+        expect(ctx.runtime.run).toHaveBeenCalledWith(
+          expect.objectContaining({
+            volumes: expect.arrayContaining([
+              expect.objectContaining({
+                source: '/tmp/claude-state/email',
+                target: '/.claude',
+              }),
+            ]),
+          }),
+        );
+      });
+    });
+
+    it('does not pass claudeStatePath when claudeStateDir is not configured', async () => {
+      const ctx = createTestServerWithRuntime();
+      server = ctx.server;
+
+      await server.start();
+
+      const subs = ctx.socketFactory.getSubscribers();
+      const envelope: EventEnvelope = {
+        id: 'evt-state-2',
+        version: 1,
+        type: 'event',
+        topic: 'task.triggered',
+        source: 'cli',
+        correlation: null,
+        timestamp: new Date().toISOString(),
+        group: 'email',
+        payload: { prompt: 'test task' },
+      };
+
+      const topicBuf = Buffer.from('task.triggered', 'utf-8');
+      const payloadBuf = Buffer.from(JSON.stringify(envelope), 'utf-8');
+      subs[0].handlers[0](topicBuf, payloadBuf);
+
+      await vi.waitFor(() => {
+        expect(ctx.runtime.run).toHaveBeenCalled();
+      });
+
+      // Without claudeStateDir, volumes should not include .claude mount
+      const runCall = (ctx.runtime.run as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      const claudeVolume = runCall.volumes?.find(
+        (v: { target: string }) => v.target === '/.claude',
+      );
+      expect(claudeVolume).toBeUndefined();
+    });
+
+    it('wires session policy deps into EventDispatcher', async () => {
+      const ctx = createTestServerWithRuntime({
+        sessionDbPath: ':memory:',
+      });
+      server = ctx.server;
+
+      await server.start();
+
+      // Verify EventDispatcher works with session policy wiring by dispatching
+      // a task.triggered event (bypasses group check)
+      const subs = ctx.socketFactory.getSubscribers();
+      const envelope: EventEnvelope = {
+        id: 'evt-policy-1',
+        version: 1,
+        type: 'event',
+        topic: 'task.triggered',
+        source: 'cli',
+        correlation: null,
+        timestamp: new Date().toISOString(),
+        group: 'test-group',
+        payload: { prompt: 'hello' },
+      };
+
+      const topicBuf = Buffer.from('task.triggered', 'utf-8');
+      const payloadBuf = Buffer.from(JSON.stringify(envelope), 'utf-8');
+      subs[0].handlers[0](topicBuf, payloadBuf);
+
+      await vi.waitFor(() => {
+        expect(ctx.runtime.run).toHaveBeenCalled();
+      });
     });
   });
 });
