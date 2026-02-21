@@ -1,9 +1,18 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { PassThrough } from 'node:stream';
 import { ContainerLifecycleManager } from './lifecycle-manager.js';
 import { MockContainerRuntime } from './mock-runtime.js';
 import { SessionManager } from '../session-manager.js';
 import type { ContainerHandle } from './runtime.js';
 import { configureLogging, resetLogging, type LogEntry, type LogSink } from '../logger.js';
+import { ContainerOutputReader } from '../container-output-reader.js';
+
+const mockStart = vi.fn();
+vi.mock('../container-output-reader.js', () => ({
+  ContainerOutputReader: vi.fn(() => ({
+    start: mockStart,
+  })),
+}));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -543,6 +552,287 @@ describe('ContainerLifecycleManager', () => {
       const cleanupLog = logEntries.find((e) => e.msg === 'orphan cleanup complete');
       expect(cleanupLog).toBeDefined();
       expect(cleanupLog!.meta?.cleaned).toBe(0);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Env var mapping: CARAPACE_RESUME_SESSION_ID → CARAPACE_RESUME_SESSION
+  // -----------------------------------------------------------------------
+
+  describe('resume session env mapping', () => {
+    it('maps CARAPACE_RESUME_SESSION_ID to CARAPACE_RESUME_SESSION in container env', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(
+        defaultSpawnRequest({ env: { CARAPACE_RESUME_SESSION_ID: 'sess-abc-123' } }),
+      );
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.env['CARAPACE_RESUME_SESSION']).toBe('sess-abc-123');
+    });
+
+    it('removes CARAPACE_RESUME_SESSION_ID from container env after mapping', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(
+        defaultSpawnRequest({ env: { CARAPACE_RESUME_SESSION_ID: 'sess-abc-123' } }),
+      );
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.env['CARAPACE_RESUME_SESSION_ID']).toBeUndefined();
+    });
+
+    it('passes through other env vars unchanged when mapping resume session', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(
+        defaultSpawnRequest({
+          env: {
+            MY_VAR: 'hello',
+            CARAPACE_RESUME_SESSION_ID: 'sess-xyz',
+            CARAPACE_TASK_PROMPT: 'do stuff',
+          },
+        }),
+      );
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.env['MY_VAR']).toBe('hello');
+      expect(callOptions.env['CARAPACE_TASK_PROMPT']).toBe('do stuff');
+      expect(callOptions.env['CARAPACE_RESUME_SESSION']).toBe('sess-xyz');
+    });
+
+    it('does not set CARAPACE_RESUME_SESSION when CARAPACE_RESUME_SESSION_ID is absent', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(defaultSpawnRequest({ env: { MY_VAR: 'test' } }));
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.env['CARAPACE_RESUME_SESSION']).toBeUndefined();
+      expect(callOptions.env['MY_VAR']).toBe('test');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Claude state path volume mount
+  // -----------------------------------------------------------------------
+
+  describe('claude state path', () => {
+    it('mounts claudeStatePath as writable volume at /home/user/.claude', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(defaultSpawnRequest({ claudeStatePath: '/data/claude-state/email' }));
+
+      const callOptions = runSpy.mock.calls[0][0];
+      const stateVolume = callOptions.volumes.find(
+        (v: { target: string }) => v.target === '/home/user/.claude',
+      );
+      expect(stateVolume).toBeDefined();
+      expect(stateVolume!.source).toBe('/data/claude-state/email');
+      expect(stateVolume!.readonly).toBe(false);
+    });
+
+    it('does not add claude state volume when claudeStatePath is not provided', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(defaultSpawnRequest());
+
+      const callOptions = runSpy.mock.calls[0][0];
+      const stateVolume = callOptions.volumes.find(
+        (v: { target: string }) => v.target === '/home/user/.claude',
+      );
+      expect(stateVolume).toBeUndefined();
+    });
+
+    it('mounts both workspace and claude state volumes when both provided', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(
+        defaultSpawnRequest({
+          workspacePath: '/home/user/workspace',
+          claudeStatePath: '/data/claude-state/email',
+        }),
+      );
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.volumes).toHaveLength(2);
+
+      const wsVolume = callOptions.volumes.find(
+        (v: { target: string }) => v.target === '/workspace',
+      );
+      const stateVolume = callOptions.volumes.find(
+        (v: { target: string }) => v.target === '/home/user/.claude',
+      );
+      expect(wsVolume).toBeDefined();
+      expect(stateVolume).toBeDefined();
+    });
+
+    it('each group gets its own isolated claude state path', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(
+        defaultSpawnRequest({
+          group: 'email',
+          claudeStatePath: '/data/claude-state/email',
+        }),
+      );
+      await manager.spawn(
+        defaultSpawnRequest({
+          group: 'slack',
+          claudeStatePath: '/data/claude-state/slack',
+          socketPath: '/tmp/sockets/s2.sock',
+        }),
+      );
+
+      const emailOpts = runSpy.mock.calls[0][0];
+      const slackOpts = runSpy.mock.calls[1][0];
+
+      const emailState = emailOpts.volumes.find(
+        (v: { target: string }) => v.target === '/home/user/.claude',
+      );
+      const slackState = slackOpts.volumes.find(
+        (v: { target: string }) => v.target === '/home/user/.claude',
+      );
+
+      expect(emailState!.source).toBe('/data/claude-state/email');
+      expect(slackState!.source).toBe('/data/claude-state/slack');
+      expect(emailState!.source).not.toBe(slackState!.source);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // ContainerOutputReader integration
+  // -----------------------------------------------------------------------
+
+  describe('container output reader', () => {
+    const MockedOutputReader = vi.mocked(ContainerOutputReader);
+
+    function createStreamingManager(overrides?: {
+      eventBus?: { publish: ReturnType<typeof vi.fn> };
+      claudeSessionStore?: {
+        save: ReturnType<typeof vi.fn>;
+        getLatest: ReturnType<typeof vi.fn>;
+      };
+    }) {
+      return new ContainerLifecycleManager({
+        runtime,
+        sessionManager,
+        eventBus: overrides?.eventBus ?? { publish: vi.fn() },
+        claudeSessionStore: overrides?.claudeSessionStore ?? {
+          save: vi.fn(),
+          getLatest: vi.fn().mockReturnValue(null),
+        },
+      });
+    }
+
+    beforeEach(() => {
+      MockedOutputReader.mockClear();
+      mockStart.mockClear();
+    });
+
+    it('creates and starts output reader when stdout, eventBus, and claudeSessionStore are available', async () => {
+      const stdout = new PassThrough();
+      runtime.simulateStdout(stdout);
+
+      const streamManager = createStreamingManager();
+      const result = await streamManager.spawn(defaultSpawnRequest());
+
+      expect(MockedOutputReader).toHaveBeenCalledOnce();
+      expect(mockStart).toHaveBeenCalledOnce();
+      expect(mockStart).toHaveBeenCalledWith(stdout, {
+        sessionId: result.session.sessionId,
+        group: 'email',
+        containerId: result.handle.id,
+      });
+
+      stdout.end();
+    });
+
+    it('does not create reader when eventBus is missing', async () => {
+      const stdout = new PassThrough();
+      runtime.simulateStdout(stdout);
+
+      const noEventBusManager = new ContainerLifecycleManager({
+        runtime,
+        sessionManager,
+        claudeSessionStore: { save: vi.fn(), getLatest: vi.fn().mockReturnValue(null) },
+      });
+
+      await noEventBusManager.spawn(defaultSpawnRequest());
+
+      expect(MockedOutputReader).not.toHaveBeenCalled();
+
+      stdout.end();
+    });
+
+    it('does not create reader when claudeSessionStore is missing', async () => {
+      const stdout = new PassThrough();
+      runtime.simulateStdout(stdout);
+
+      const noStoreManager = new ContainerLifecycleManager({
+        runtime,
+        sessionManager,
+        eventBus: { publish: vi.fn() },
+      });
+
+      await noStoreManager.spawn(defaultSpawnRequest());
+
+      expect(MockedOutputReader).not.toHaveBeenCalled();
+
+      stdout.end();
+    });
+
+    it('does not create reader when handle has no stdout', async () => {
+      // Default mock runtime does not provide stdout
+      const streamManager = createStreamingManager();
+      await streamManager.spawn(defaultSpawnRequest());
+
+      expect(MockedOutputReader).not.toHaveBeenCalled();
+    });
+
+    it('passes eventBus and claudeSessionStore to output reader', async () => {
+      const stdout = new PassThrough();
+      runtime.simulateStdout(stdout);
+
+      const eventBus = { publish: vi.fn() };
+      const claudeSessionStore = { save: vi.fn(), getLatest: vi.fn().mockReturnValue(null) };
+
+      const streamManager = createStreamingManager({ eventBus, claudeSessionStore });
+      await streamManager.spawn(defaultSpawnRequest());
+
+      expect(MockedOutputReader).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventBus,
+          claudeSessionStore,
+        }),
+      );
+
+      stdout.end();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Backward compatibility
+  // -----------------------------------------------------------------------
+
+  describe('backward compatibility', () => {
+    it('spawn works without streaming deps (eventBus, claudeSessionStore)', async () => {
+      // Default manager has no streaming deps
+      const result = await manager.spawn(defaultSpawnRequest());
+
+      expect(result.handle).toBeDefined();
+      expect(result.session).toBeDefined();
+    });
+
+    it('spawn works with stdout handle but no streaming deps', async () => {
+      const stdout = new PassThrough();
+      runtime.simulateStdout(stdout);
+
+      const result = await manager.spawn(defaultSpawnRequest());
+
+      expect(result.handle).toBeDefined();
+      expect(result.handle.stdout).toBe(stdout);
+
+      stdout.end();
     });
   });
 });
