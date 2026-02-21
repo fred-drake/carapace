@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   createLogger,
   configureLogging,
@@ -79,8 +79,8 @@ describe('Logger', () => {
       expect(entry.msg).toBe('test message');
       expect(entry.ts).toBeDefined();
       // Old fields should not exist
-      expect((entry as Record<string, unknown>).timestamp).toBeUndefined();
-      expect((entry as Record<string, unknown>).message).toBeUndefined();
+      expect((entry as unknown as Record<string, unknown>).timestamp).toBeUndefined();
+      expect((entry as unknown as Record<string, unknown>).message).toBeUndefined();
     });
 
     it('timestamp is ISO 8601 format', () => {
@@ -635,5 +635,92 @@ describe('ContainerLogRouter', () => {
     router.routeStderr('error output\n');
 
     expect(entries[0].meta!.stream).toBe('stderr');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createSessionLogSink
+// ---------------------------------------------------------------------------
+
+describe('createSessionLogSink', () => {
+  it('creates parent directory and appends JSONL', async () => {
+    const { createSessionLogSink } = await import('./logger.js');
+
+    const written: string[] = [];
+    const fakeFs = {
+      mkdirSync: vi.fn(),
+      appendFileSync: vi.fn((_path: string, data: string) => written.push(data)),
+    };
+
+    const sink = createSessionLogSink('/data/logs/email/session-1.jsonl', fakeFs);
+
+    expect(fakeFs.mkdirSync).toHaveBeenCalledWith('/data/logs/email', { recursive: true });
+
+    const entry: LogEntry = {
+      level: 'info',
+      ts: new Date().toISOString(),
+      component: 'test',
+      msg: 'hello',
+    };
+    sink(entry);
+
+    expect(written).toHaveLength(1);
+    expect(written[0]).toBe(JSON.stringify(entry) + '\n');
+  });
+
+  it('stops writing after close()', async () => {
+    const { createSessionLogSink } = await import('./logger.js');
+
+    const written: string[] = [];
+    const fakeFs = {
+      mkdirSync: vi.fn(),
+      appendFileSync: vi.fn((_path: string, data: string) => written.push(data)),
+    };
+
+    const sink = createSessionLogSink('/data/logs/email/session-2.jsonl', fakeFs);
+
+    sink({
+      level: 'info',
+      ts: new Date().toISOString(),
+      component: 'test',
+      msg: 'before close',
+    });
+
+    sink.close();
+
+    sink({
+      level: 'info',
+      ts: new Date().toISOString(),
+      component: 'test',
+      msg: 'after close',
+    });
+
+    expect(written).toHaveLength(1);
+    expect(written[0]).toContain('before close');
+  });
+
+  it('writes valid JSONL (each line is parseable JSON)', async () => {
+    const { createSessionLogSink } = await import('./logger.js');
+
+    const written: string[] = [];
+    const fakeFs = {
+      mkdirSync: vi.fn(),
+      appendFileSync: vi.fn((_path: string, data: string) => written.push(data)),
+    };
+
+    const sink = createSessionLogSink('/data/logs/slack/session-3.jsonl', fakeFs);
+
+    sink({
+      level: 'warn',
+      ts: new Date().toISOString(),
+      component: 'router',
+      msg: 'rate limited',
+      meta: { count: 42 },
+    });
+
+    const parsed = JSON.parse(written[0].trim());
+    expect(parsed.level).toBe('warn');
+    expect(parsed.msg).toBe('rate limited');
+    expect(parsed.meta.count).toBe(42);
   });
 });

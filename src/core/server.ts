@@ -185,7 +185,7 @@ export class Server {
     await this.eventBus.bind(provision.eventAddress);
 
     // 4. Create subsystems
-    this.toolCatalog = new ToolCatalog();
+    this.toolCatalog = new ToolCatalog(this.logger.child('tool-catalog'));
     this.sessionManager = new SessionManager(this.logger.child('session'));
     this.responseSanitizer = new ResponseSanitizer();
 
@@ -196,6 +196,7 @@ export class Server {
       toolCatalog: this.toolCatalog,
       userPluginsDir: this.config.pluginsDir,
       builtinPluginsDir: this.config.builtinPluginsDir,
+      logger: this.logger.child('plugin-loader'),
     });
 
     this.router = new MessageRouter(this.toolCatalog);

@@ -3,6 +3,7 @@ import { ToolCatalog } from './tool-catalog.js';
 import { PluginLoader } from './plugin-loader.js';
 import type { PluginHandler } from './plugin-handler.js';
 import { createManifest, createToolDeclaration } from '../testing/factories.js';
+import { configureLogging, resetLogging, type LogEntry, type LogSink } from './logger.js';
 
 // ---------------------------------------------------------------------------
 // Mock node:fs/promises
@@ -976,6 +977,162 @@ describe('PluginLoader', () => {
       await loader.loadAll();
 
       expect(loader.getHandler('accessor-all')).toBe(handler);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Logging
+  // -----------------------------------------------------------------------
+
+  describe('logging', () => {
+    let logEntries: LogEntry[];
+
+    beforeEach(() => {
+      logEntries = [];
+      const logSink: LogSink = (entry) => logEntries.push(entry);
+      configureLogging({ level: 'debug', sink: logSink });
+    });
+
+    afterEach(() => {
+      resetLogging();
+    });
+
+    it('logs loading plugin on loadPlugin start', async () => {
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'log_start_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      allowAccess(['/plugins/alpha/manifest.json', '/plugins/alpha/handler.js']);
+      importMocks.set('/plugins/alpha/handler.js', () => Promise.resolve({ default: handler }));
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      await loader.loadPlugin('/plugins/alpha');
+
+      const loadLog = logEntries.find((e) => e.msg === 'loading plugin');
+      expect(loadLog).toBeDefined();
+      expect(loadLog!.meta?.pluginName).toBe('alpha');
+    });
+
+    it('logs plugin loaded on successful load', async () => {
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'log_success_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      allowAccess(['/plugins/alpha/manifest.json', '/plugins/alpha/handler.js']);
+      importMocks.set('/plugins/alpha/handler.js', () => Promise.resolve({ default: handler }));
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      await loader.loadPlugin('/plugins/alpha');
+
+      const loadedLog = logEntries.find((e) => e.msg === 'plugin loaded');
+      expect(loadedLog).toBeDefined();
+      expect(loadedLog!.meta?.pluginName).toBe('alpha');
+      expect(loadedLog!.meta?.tools).toEqual(['log_success_tool']);
+    });
+
+    it('logs plugin load failed on invalid manifest', async () => {
+      mockReadFile.mockResolvedValue('{ invalid }}}');
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      await loader.loadPlugin('/plugins/alpha');
+
+      const failLog = logEntries.find((e) => e.msg === 'plugin load failed');
+      expect(failLog).toBeDefined();
+      expect(failLog!.level).toBe('warn');
+      expect(failLog!.meta?.pluginName).toBe('alpha');
+      expect(failLog!.meta?.category).toBe('invalid_manifest');
+    });
+
+    it('logs discovered plugins count in loadAll', async () => {
+      mockReaddir.mockResolvedValue(['alpha'] as unknown as Awaited<ReturnType<typeof readdir>>);
+      allowAccess(['/plugins/alpha/manifest.json', '/plugins/alpha/handler.js']);
+
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'loadall_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      importMocks.set('/plugins/alpha/handler.js', () => Promise.resolve({ default: handler }));
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      await loader.loadAll();
+
+      const discoverLog = logEntries.find((e) => e.msg === 'discovered plugins');
+      expect(discoverLog).toBeDefined();
+      expect(discoverLog!.meta?.count).toBe(1);
+
+      const allLog = logEntries.find((e) => e.msg === 'all plugins loaded');
+      expect(allLog).toBeDefined();
+      expect(allLog!.meta?.succeeded).toBe(1);
+      expect(allLog!.meta?.failed).toBe(0);
+    });
+
+    it('logs shutting down all plugins on shutdownAll', async () => {
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'shutdown_log_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      allowAccess(['/plugins/gamma/manifest.json', '/plugins/gamma/handler.js']);
+      importMocks.set('/plugins/gamma/handler.js', () => Promise.resolve({ default: handler }));
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      await loader.loadPlugin('/plugins/gamma');
+
+      await loader.shutdownAll();
+
+      const shutdownLog = logEntries.find((e) => e.msg === 'shutting down all plugins');
+      expect(shutdownLog).toBeDefined();
+      expect(shutdownLog!.meta?.count).toBe(1);
+
+      const doneLog = logEntries.find((e) => e.msg === 'all plugins shut down');
+      expect(doneLog).toBeDefined();
+    });
+
+    it('uses plugin-loader component name', async () => {
+      mockReadFile.mockRejectedValue(new Error('ENOENT'));
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      await loader.loadPlugin('/plugins/alpha');
+
+      const log = logEntries.find((e) => e.msg === 'loading plugin');
+      expect(log).toBeDefined();
+      expect(log!.component).toBe('plugin-loader');
     });
   });
 });
