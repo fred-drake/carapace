@@ -45,6 +45,8 @@ docker run -d \
   --read-only \
   --network none \
   --tmpfs /tmp:rw,noexec,nosuid \
+  --tmpfs /workspace:rw,size=64M,uid=1000,gid=1000 \
+  --tmpfs /run/zmq:rw,size=16M,uid=1000,gid=1000 \
   --entrypoint sleep \
   "$IMAGE" \
   300
@@ -70,7 +72,7 @@ else
   pass "Root filesystem is read-only"
 fi
 
-# /workspace should be writable
+# /workspace should be writable (tmpfs mount)
 if run_in_container touch /workspace/test-file 2>/dev/null; then
   run_in_container rm -f /workspace/test-file 2>/dev/null || true
   pass "/workspace is writable"
@@ -78,7 +80,7 @@ else
   fail "/workspace is not writable"
 fi
 
-# /run/zmq should be writable
+# /run/zmq should be writable (tmpfs mount)
 if run_in_container touch /run/zmq/test-file 2>/dev/null; then
   run_in_container rm -f /run/zmq/test-file 2>/dev/null || true
   pass "/run/zmq is writable"
@@ -109,11 +111,11 @@ fi
 echo ""
 echo "--- Network checks ---"
 
-# ping should fail (no network)
-if run_in_container ping -c 1 -W 2 8.8.8.8 2>/dev/null; then
-  fail "Network is reachable (ping 8.8.8.8 succeeded)"
+# Network should be unreachable (--network none)
+if run_in_container sh -c 'node -e "fetch(\"http://1.1.1.1\").then(()=>process.exit(0)).catch(()=>process.exit(1))"' 2>/dev/null; then
+  fail "Network is reachable (HTTP request succeeded)"
 else
-  pass "Network is unreachable (ping failed as expected)"
+  pass "Network is unreachable"
 fi
 
 # ---------------------------------------------------------------------------
@@ -123,7 +125,7 @@ fi
 echo ""
 echo "--- Binary checks ---"
 
-if run_in_container which ipc 2>/dev/null; then
+if run_in_container sh -c 'command -v ipc' 2>/dev/null; then
   pass "ipc binary is in PATH"
 else
   fail "ipc binary is not in PATH"

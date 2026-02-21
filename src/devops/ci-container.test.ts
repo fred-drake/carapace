@@ -153,7 +153,7 @@ describe('container-smoke-test.sh', () => {
     });
 
     it('verifies network is unreachable', () => {
-      expect(hasLine(scriptLines, /ping|wget|curl|nc\b/)).toBe(true);
+      expect(hasLine(scriptLines, /ping|wget|curl|nc\b|fetch/)).toBe(true);
     });
 
     it('verifies ipc binary is available', () => {

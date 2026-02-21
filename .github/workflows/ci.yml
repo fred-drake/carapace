@@ -126,6 +126,8 @@ jobs:
           format: table
           exit-code: 1
           severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
           timeout: 5m
 
       # Container smoke test — validates security constraints

@@ -152,13 +152,12 @@ describe('no network access', () => {
   it('DNS resolution fails', async () => {
     if (!dockerAvailable) return;
 
-    // nslookup may not be installed, use a generic network check
+    // Use node to attempt DNS resolution — works on both Debian and Alpine
     const result = await execInContainer([
-      'sh',
-      '-c',
-      'cat /etc/resolv.conf 2>/dev/null && getent hosts google.com 2>&1',
+      'node',
+      '-e',
+      'require("dns").resolve("google.com", (err) => process.exit(err ? 1 : 0))',
     ]);
-    // Either getent is not found or DNS fails
     expect(result.exitCode).not.toBe(0);
   });
 
@@ -199,7 +198,7 @@ describe('ipc binary availability', () => {
   it('ipc binary exists and is executable', async () => {
     if (!dockerAvailable) return;
 
-    const result = await execInContainer(['which', 'ipc']);
+    const result = await execInContainer(['sh', '-c', 'command -v ipc']);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('ipc');
   });
@@ -260,37 +259,37 @@ describe('no extra package managers or tools', () => {
     if (!dockerAvailable) return;
 
     // curl is intentionally installed for the Claude Code native installer
-    const result = await execInContainer(['which', 'curl']);
+    const result = await execInContainer(['sh', '-c', 'command -v curl']);
     expect(result.exitCode).toBe(0);
   });
 
   it('wget is not available', async () => {
     if (!dockerAvailable) return;
 
-    const result = await execInContainer(['which', 'wget']);
+    const result = await execInContainer(['sh', '-c', 'command -v wget']);
     expect(result.exitCode).not.toBe(0);
   });
 
-  it('apt-get cannot install new packages (no lists + read-only FS)', async () => {
+  it('apk cannot install new packages (read-only FS)', async () => {
     if (!dockerAvailable) return;
 
-    // apt-get exists but /var/lib/apt/lists is cleaned and FS is read-only,
-    // so `apt-get install` should fail even though apt-get binary is present
-    const result = await execInContainer(['sh', '-c', 'apt-get install -y netcat-openbsd 2>&1']);
+    // apk exists but the filesystem is read-only,
+    // so `apk add` should fail even though the apk binary is present
+    const result = await execInContainer(['sh', '-c', 'apk add netcat-openbsd 2>&1']);
     expect(result.exitCode).not.toBe(0);
   });
 
   it('pip is not available', async () => {
     if (!dockerAvailable) return;
 
-    const result = await execInContainer(['which', 'pip']);
+    const result = await execInContainer(['sh', '-c', 'command -v pip']);
     expect(result.exitCode).not.toBe(0);
   });
 
   it('pip3 is not available', async () => {
     if (!dockerAvailable) return;
 
-    const result = await execInContainer(['which', 'pip3']);
+    const result = await execInContainer(['sh', '-c', 'command -v pip3']);
     expect(result.exitCode).not.toBe(0);
   });
 

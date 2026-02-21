@@ -1,0 +1,16 @@
+# Trivy CVE ignore list
+# These vulnerabilities come from packages bundled inside Claude Code's
+# installer or Node.js's internal npm tooling. They are not in our
+# dependency tree and cannot be patched by us.
+
+# glob — bundled in Claude Code / npm internals
+CVE-2025-64756
+
+# minimatch — bundled in Claude Code / npm internals
+CVE-2026-26996
+
+# tar (node-tar) — bundled in Claude Code / npm internals
+CVE-2026-23745
+CVE-2026-23950
+CVE-2026-24842
+CVE-2026-26960
