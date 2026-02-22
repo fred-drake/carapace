@@ -1,5 +1,5 @@
 /**
- * Tests for InstallerHandler — plugin_install tool.
+ * Tests for InstallerHandler — plugin_install and plugin_verify tools.
  *
  * All tests use mocked GitOps and filesystem — no real git or disk I/O.
  */
@@ -9,11 +9,17 @@ import {
   InstallerHandler,
   type InstallerDeps,
   type InstallerFs,
+  type FileStat,
   type SanitizeFunction,
 } from './handler.js';
 import type { GitOps } from './git-ops.js';
 import type { SanitizerFs, SanitizationResult } from './git-sanitizer.js';
-import type { CoreServices, PluginContext } from '../../core/plugin-handler.js';
+import type {
+  CoreServices,
+  PluginContext,
+  PluginHandler,
+  PluginVerifyResult,
+} from '../../core/plugin-handler.js';
 import { ErrorCode } from '../../types/errors.js';
 
 // ---------------------------------------------------------------------------
@@ -100,11 +106,21 @@ function createMockGitOps(): GitOps {
   };
 }
 
+function createMockFileStat(overrides?: Partial<FileStat>): FileStat {
+  return {
+    isSymbolicLink: () => false,
+    mode: 0o100600,
+    size: 42,
+    ...overrides,
+  };
+}
+
 function createMockFs(overrides?: Partial<InstallerFs>): InstallerFs {
   return {
     existsSync: vi.fn((): boolean => false),
     readFileSync: vi.fn((): string => validManifestJson()),
     rmSync: vi.fn(),
+    lstatSync: vi.fn((): FileStat => createMockFileStat()),
     ...overrides,
   };
 }
@@ -154,6 +170,7 @@ function createServices(): CoreServices {
     getAuditLog: vi.fn(async () => []),
     getToolCatalog: vi.fn(() => []),
     getSessionInfo: vi.fn(() => ({ group: '', sessionId: '', startedAt: '' })),
+    readCredential: vi.fn((): string => ''),
   };
 }
 
@@ -711,6 +728,492 @@ describe('InstallerHandler', () => {
       if (!result.ok) {
         expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
         expect(result.error.message).toContain('url');
+      }
+    });
+  });
+
+  // =======================================================================
+  // plugin_verify
+  // =======================================================================
+
+  describe('plugin_verify', () => {
+    // For verify tests, plugin directory must exist and manifest must be readable
+    let verifyFs: InstallerFs;
+
+    /** Create an fs mock where the plugin dir and credential files exist. */
+    function createVerifyFs(overrides?: {
+      credExists?: boolean;
+      stat?: Partial<FileStat>;
+      manifestJson?: string;
+    }): InstallerFs {
+      const credExists = overrides?.credExists ?? true;
+      const manifestStr = overrides?.manifestJson ?? validManifestJson();
+      const stat = createMockFileStat(overrides?.stat);
+      return {
+        existsSync: vi.fn((path: string): boolean => {
+          // Credential files: check first (more specific — path also contains /plugins/)
+          if (path.includes('/credentials/')) return credExists;
+          // Plugin dir always exists for verify tests
+          if (path.includes('/plugins/')) return true;
+          return false;
+        }),
+        readFileSync: vi.fn((): string => manifestStr),
+        rmSync: vi.fn(),
+        lstatSync: vi.fn((): FileStat => stat),
+      };
+    }
+
+    beforeEach(async () => {
+      verifyFs = createVerifyFs();
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+    });
+
+    // ---------------------------------------------------------------------
+    // Missing name argument
+    // ---------------------------------------------------------------------
+
+    it('should return validation error when name is missing', async () => {
+      const result = await handler.handleToolInvocation('plugin_verify', {}, context);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('name');
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Plugin not found
+    // ---------------------------------------------------------------------
+
+    it('should return error when plugin directory does not exist', async () => {
+      const noPluginFs = createMockFs();
+      // existsSync returns false for everything
+      handler = new InstallerHandler(deps, noPluginFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'nonexistent' },
+        context,
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.HANDLER_ERROR);
+        expect(result.error.message).toContain('not found');
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // All credentials present and valid → ready: true
+    // ---------------------------------------------------------------------
+
+    it('should return ready: true when all credentials are present and valid', async () => {
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(true);
+        expect(result.result['plugin_name']).toBe('my-plugin');
+        const creds = result.result['credential_status'] as Array<Record<string, unknown>>;
+        expect(creds).toHaveLength(2);
+        expect(creds[0]!['key']).toBe('api_key');
+        expect(creds[0]!['found']).toBe(true);
+        expect(creds[0]!['valid_permissions']).toBe(true);
+        expect(creds[0]!['not_empty']).toBe(true);
+        expect(creds[0]!['not_symlink']).toBe(true);
+        // No smoke_test when no handler loaded
+        expect(result.result['smoke_test']).toBeUndefined();
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Missing credential file → ready: false
+    // ---------------------------------------------------------------------
+
+    it('should return ready: false when a credential file is missing', async () => {
+      verifyFs = createVerifyFs({ credExists: false });
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(false);
+        const creds = result.result['credential_status'] as Array<Record<string, unknown>>;
+        expect(creds[0]!['found']).toBe(false);
+        expect(creds[0]!['valid_permissions']).toBe(false);
+        expect(creds[0]!['not_empty']).toBe(false);
+        expect(creds[0]!['not_symlink']).toBe(false);
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Wrong permissions → ready: false
+    // ---------------------------------------------------------------------
+
+    it('should return ready: false when credential has wrong permissions', async () => {
+      verifyFs = createVerifyFs({ stat: { mode: 0o100644 } });
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(false);
+        const creds = result.result['credential_status'] as Array<Record<string, unknown>>;
+        expect(creds[0]!['found']).toBe(true);
+        expect(creds[0]!['valid_permissions']).toBe(false);
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // 0o400 permissions are valid
+    // ---------------------------------------------------------------------
+
+    it('should accept 0o400 (read-only owner) permissions', async () => {
+      verifyFs = createVerifyFs({ stat: { mode: 0o100400 } });
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(true);
+        const creds = result.result['credential_status'] as Array<Record<string, unknown>>;
+        expect(creds[0]!['valid_permissions']).toBe(true);
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Symlink detected → ready: false
+    // ---------------------------------------------------------------------
+
+    it('should return ready: false when credential is a symlink', async () => {
+      verifyFs = createVerifyFs({ stat: { isSymbolicLink: () => true } });
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(false);
+        const creds = result.result['credential_status'] as Array<Record<string, unknown>>;
+        expect(creds[0]!['not_symlink']).toBe(false);
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Empty file → ready: false
+    // ---------------------------------------------------------------------
+
+    it('should return ready: false when credential file is empty', async () => {
+      verifyFs = createVerifyFs({ stat: { size: 0 } });
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(false);
+        const creds = result.result['credential_status'] as Array<Record<string, unknown>>;
+        expect(creds[0]!['not_empty']).toBe(false);
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // No install.credentials → skip Phase 1, ready: true
+    // ---------------------------------------------------------------------
+
+    it('should return ready: true when manifest has no install.credentials', async () => {
+      verifyFs = createVerifyFs({ manifestJson: validManifestWithoutInstall() });
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(true);
+        const creds = result.result['credential_status'] as Array<Record<string, unknown>>;
+        expect(creds).toHaveLength(0);
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Smoke test: success
+    // ---------------------------------------------------------------------
+
+    it('should include successful smoke test result', async () => {
+      const mockHandler: PluginHandler = {
+        initialize: vi.fn(async () => {}),
+        handleToolInvocation: vi.fn(async () => ({ ok: true as const, result: {} })),
+        verify: vi.fn(
+          async (): Promise<PluginVerifyResult> => ({
+            ok: true,
+            message: 'Connection successful',
+          }),
+        ),
+        shutdown: vi.fn(async () => {}),
+      };
+
+      deps = createDeps({ getLoadedHandler: () => mockHandler });
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(true);
+        const smoke = result.result['smoke_test'] as { ok: boolean; message: string };
+        expect(smoke.ok).toBe(true);
+        expect(smoke.message).toBe('Connection successful');
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Smoke test: failure
+    // ---------------------------------------------------------------------
+
+    it('should include failed smoke test result and set ready: false', async () => {
+      const mockHandler: PluginHandler = {
+        initialize: vi.fn(async () => {}),
+        handleToolInvocation: vi.fn(async () => ({ ok: true as const, result: {} })),
+        verify: vi.fn(
+          async (): Promise<PluginVerifyResult> => ({
+            ok: false,
+            message: 'API returned 401',
+          }),
+        ),
+        shutdown: vi.fn(async () => {}),
+      };
+
+      deps = createDeps({ getLoadedHandler: () => mockHandler });
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(false);
+        const smoke = result.result['smoke_test'] as { ok: boolean; message: string };
+        expect(smoke.ok).toBe(false);
+        expect(smoke.message).toBe('API returned 401');
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Smoke test: verify() throws
+    // ---------------------------------------------------------------------
+
+    it('should handle verify() that throws an exception', async () => {
+      const mockHandler: PluginHandler = {
+        initialize: vi.fn(async () => {}),
+        handleToolInvocation: vi.fn(async () => ({ ok: true as const, result: {} })),
+        verify: vi.fn(async (): Promise<PluginVerifyResult> => {
+          throw new Error('Network unreachable');
+        }),
+        shutdown: vi.fn(async () => {}),
+      };
+
+      deps = createDeps({ getLoadedHandler: () => mockHandler });
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(false);
+        const smoke = result.result['smoke_test'] as { ok: boolean; message: string };
+        expect(smoke.ok).toBe(false);
+        expect(smoke.message).toContain('Smoke test failed');
+        expect(smoke.message).toContain('Network unreachable');
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Smoke test: timeout (10s)
+    // ---------------------------------------------------------------------
+
+    it('should return timeout when verify() exceeds 10 seconds', async () => {
+      vi.useFakeTimers();
+
+      const mockHandler: PluginHandler = {
+        initialize: vi.fn(async () => {}),
+        handleToolInvocation: vi.fn(async () => ({ ok: true as const, result: {} })),
+        verify: vi.fn(
+          () =>
+            new Promise<PluginVerifyResult>(() => {
+              // Never resolves — simulates a hang
+            }),
+        ),
+        shutdown: vi.fn(async () => {}),
+      };
+
+      deps = createDeps({ getLoadedHandler: () => mockHandler });
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const resultPromise = handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      // Advance time past the 10s timeout
+      await vi.advanceTimersByTimeAsync(10_001);
+
+      const result = await resultPromise;
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(false);
+        const smoke = result.result['smoke_test'] as { ok: boolean; message: string };
+        expect(smoke.ok).toBe(false);
+        expect(smoke.message).toContain('timed out');
+      }
+
+      vi.useRealTimers();
+    });
+
+    // ---------------------------------------------------------------------
+    // No verify() method → skip Phase 2, still ready if creds OK
+    // ---------------------------------------------------------------------
+
+    it('should skip smoke test when handler has no verify() method', async () => {
+      const mockHandler: PluginHandler = {
+        initialize: vi.fn(async () => {}),
+        handleToolInvocation: vi.fn(async () => ({ ok: true as const, result: {} })),
+        // No verify() method
+        shutdown: vi.fn(async () => {}),
+      };
+
+      deps = createDeps({ getLoadedHandler: () => mockHandler });
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(true);
+        expect(result.result['smoke_test']).toBeUndefined();
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // No loaded handler → skip Phase 2, still ready if creds OK
+    // ---------------------------------------------------------------------
+
+    it('should skip smoke test when no handler is loaded', async () => {
+      // Default deps have no getLoadedHandler, so it returns undefined
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['ready']).toBe(true);
+        expect(result.result['smoke_test']).toBeUndefined();
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // Smoke test detail sanitization
+    // ---------------------------------------------------------------------
+
+    it('should sanitize credential values in verify() detail', async () => {
+      const mockHandler: PluginHandler = {
+        initialize: vi.fn(async () => {}),
+        handleToolInvocation: vi.fn(async () => ({ ok: true as const, result: {} })),
+        verify: vi.fn(
+          async (): Promise<PluginVerifyResult> => ({
+            ok: true,
+            message: 'Connected',
+            detail: {
+              token: 'Bearer ghp_ABC123DEF456secret',
+              status: 'ok',
+            },
+          }),
+        ),
+        shutdown: vi.fn(async () => {}),
+      };
+
+      deps = createDeps({ getLoadedHandler: () => mockHandler });
+      handler = new InstallerHandler(deps, verifyFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_verify',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const smoke = result.result['smoke_test'] as { ok: boolean; message: string };
+        expect(smoke.ok).toBe(true);
+        expect(smoke.message).toContain('sanitized');
+        expect(smoke.message).toContain('redacted');
+        // Must NOT contain the actual token
+        expect(smoke.message).not.toContain('ghp_ABC123DEF456secret');
       }
     });
   });
