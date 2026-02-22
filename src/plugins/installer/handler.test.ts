@@ -1,5 +1,6 @@
 /**
- * Tests for InstallerHandler — plugin_install tool.
+ * Tests for InstallerHandler — plugin_install, plugin_list, plugin_remove,
+ * plugin_update, and plugin_configure tools.
  *
  * All tests use mocked GitOps and filesystem — no real git or disk I/O.
  */
@@ -87,6 +88,87 @@ function validManifestWithoutInstall(): string {
   });
 }
 
+function validManifestWithConfig(): string {
+  return JSON.stringify({
+    description: 'A plugin with config schema',
+    version: '1.0.0',
+    app_compat: '>=0.1.0',
+    author: { name: 'Test Author' },
+    provides: {
+      channels: [],
+      tools: [
+        {
+          name: 'test_tool',
+          description: 'A test tool',
+          risk_level: 'low',
+          arguments_schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {},
+          },
+        },
+      ],
+    },
+    subscribes: [],
+    config_schema: {
+      type: 'object',
+      properties: {
+        email: { type: 'string', description: 'Notification email' },
+        max_retries: { type: 'number', description: 'Max retries' },
+        enabled: { type: 'boolean', description: 'Enable plugin' },
+      },
+    },
+  });
+}
+
+function updatedManifestWithNewCreds(): string {
+  return JSON.stringify({
+    description: 'A test plugin (updated)',
+    version: '2.0.0',
+    app_compat: '>=0.1.0',
+    author: { name: 'Test Author' },
+    provides: {
+      channels: [],
+      tools: [
+        {
+          name: 'test_tool',
+          description: 'A test tool',
+          risk_level: 'low',
+          arguments_schema: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              input: { type: 'string', description: 'Test input' },
+            },
+          },
+        },
+      ],
+    },
+    subscribes: [],
+    install: {
+      credentials: [
+        {
+          key: 'api_key',
+          description: 'The API key',
+          required: true,
+          obtain_url: 'https://example.com/keys',
+        },
+        {
+          key: 'webhook_secret',
+          description: 'Optional webhook secret',
+          required: false,
+        },
+        {
+          key: 'new_token',
+          description: 'A new auth token',
+          required: true,
+          obtain_url: 'https://example.com/tokens',
+        },
+      ],
+    },
+  });
+}
+
 function createMockGitOps(): GitOps {
   return {
     clone: vi.fn(async () => {}),
@@ -94,7 +176,7 @@ function createMockGitOps(): GitOps {
     checkout: vi.fn(async () => {}),
     getRemoteUrl: vi.fn(async () => ''),
     getCurrentRef: vi.fn(async () => ''),
-    getDefaultBranch: vi.fn(async () => 'main'),
+    getDefaultBranch: vi.fn(async (): Promise<string> => 'main'),
     configUnset: vi.fn(async () => {}),
     configList: vi.fn(async () => new Map()),
   };
@@ -105,6 +187,9 @@ function createMockFs(overrides?: Partial<InstallerFs>): InstallerFs {
     existsSync: vi.fn((): boolean => false),
     readFileSync: vi.fn((): string => validManifestJson()),
     rmSync: vi.fn(),
+    readdirSync: vi.fn((): string[] => []),
+    writeFileSync: vi.fn(),
+    mkdirSync: vi.fn(),
     ...overrides,
   };
 }
@@ -712,6 +797,722 @@ describe('InstallerHandler', () => {
       if (!result.ok) {
         expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
         expect(result.error.message).toContain('url');
+      }
+    });
+  });
+
+  // =======================================================================
+  // plugin_list
+  // =======================================================================
+
+  describe('plugin_list', () => {
+    it('should list installed plugins from pluginsDir', async () => {
+      mockFs = createMockFs({
+        readdirSync: vi.fn((): string[] => ['my-plugin', 'other-plugin']),
+        existsSync: vi.fn((p: string): boolean => {
+          // manifest.json exists for both plugins, .git exists for my-plugin only
+          if (p.endsWith('manifest.json')) return true;
+          if (p === '/home/user/.carapace/plugins/my-plugin/.git') return true;
+          if (p === '/home/user/.carapace/plugins/other-plugin/.git') return false;
+          return false;
+        }),
+        readFileSync: vi.fn((p: string): string => {
+          if (p.includes('my-plugin')) return validManifestJson();
+          if (p.includes('other-plugin')) return validManifestWithoutInstall();
+          return validManifestJson();
+        }),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation('plugin_list', {}, context);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const plugins = result.result['plugins'] as Array<Record<string, unknown>>;
+        expect(plugins).toHaveLength(2);
+
+        expect(plugins[0]!['name']).toBe('my-plugin');
+        expect(plugins[0]!['version']).toBe('1.0.0');
+        expect(plugins[0]!['description']).toBe('A test plugin');
+        expect(plugins[0]!['tools']).toEqual(['test_tool']);
+        expect(plugins[0]!['installed_via_git']).toBe(true);
+
+        expect(plugins[1]!['name']).toBe('other-plugin');
+        expect(plugins[1]!['version']).toBe('2.0.0');
+        expect(plugins[1]!['installed_via_git']).toBe(false);
+      }
+    });
+
+    it('should return empty list when pluginsDir is empty', async () => {
+      mockFs = createMockFs({
+        readdirSync: vi.fn((): string[] => []),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation('plugin_list', {}, context);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const plugins = result.result['plugins'] as Array<Record<string, unknown>>;
+        expect(plugins).toHaveLength(0);
+      }
+    });
+
+    it('should include built-in plugin names when include_builtin is true', async () => {
+      mockFs = createMockFs({
+        readdirSync: vi.fn((): string[] => []),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_list',
+        { include_builtin: true },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const plugins = result.result['plugins'] as Array<Record<string, unknown>>;
+        // reservedNames: installer, memory, test-input
+        expect(plugins).toHaveLength(3);
+        const builtinNames = plugins.map((p) => p['name']);
+        expect(builtinNames).toContain('installer');
+        expect(builtinNames).toContain('memory');
+        expect(builtinNames).toContain('test-input');
+        expect(plugins[0]!['builtin']).toBe(true);
+      }
+    });
+
+    it('should skip directories without manifest.json', async () => {
+      mockFs = createMockFs({
+        readdirSync: vi.fn((): string[] => ['has-manifest', 'no-manifest']),
+        existsSync: vi.fn((p: string): boolean => {
+          if (p === '/home/user/.carapace/plugins/has-manifest/manifest.json') return true;
+          if (p === '/home/user/.carapace/plugins/no-manifest/manifest.json') return false;
+          return false;
+        }),
+        readFileSync: vi.fn((): string => validManifestJson()),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation('plugin_list', {}, context);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const plugins = result.result['plugins'] as Array<Record<string, unknown>>;
+        expect(plugins).toHaveLength(1);
+        expect(plugins[0]!['name']).toBe('has-manifest');
+      }
+    });
+
+    it('should handle unreadable pluginsDir gracefully', async () => {
+      mockFs = createMockFs({
+        readdirSync: vi.fn((): string[] => {
+          throw new Error('ENOENT');
+        }),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation('plugin_list', {}, context);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const plugins = result.result['plugins'] as Array<Record<string, unknown>>;
+        expect(plugins).toHaveLength(0);
+      }
+    });
+
+    it('should note plugins with invalid manifests', async () => {
+      mockFs = createMockFs({
+        readdirSync: vi.fn((): string[] => ['broken-plugin']),
+        existsSync: vi.fn((p: string): boolean => {
+          if (p.endsWith('manifest.json')) return true;
+          return false;
+        }),
+        readFileSync: vi.fn((): string => '{ invalid json'),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation('plugin_list', {}, context);
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const plugins = result.result['plugins'] as Array<Record<string, unknown>>;
+        expect(plugins).toHaveLength(1);
+        expect(plugins[0]!['name']).toBe('broken-plugin');
+        expect(plugins[0]!['error']).toBe('Invalid manifest');
+      }
+    });
+  });
+
+  // =======================================================================
+  // plugin_remove
+  // =======================================================================
+
+  describe('plugin_remove', () => {
+    it('should remove a plugin directory and retain credentials by default', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((p: string): boolean => {
+          if (p === '/home/user/.carapace/plugins/my-plugin') return true;
+          return false;
+        }),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_remove',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['removed']).toBe('my-plugin');
+        expect(result.result['credentials_retained']).toBe(true);
+        expect(result.result['requires_restart']).toBe(true);
+      }
+
+      expect(mockFs.rmSync).toHaveBeenCalledWith('/home/user/.carapace/plugins/my-plugin', {
+        recursive: true,
+        force: true,
+      });
+    });
+
+    it('should remove credentials when remove_credentials is true', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((): boolean => true),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_remove',
+        { name: 'my-plugin', remove_credentials: true },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['credentials_retained']).toBe(false);
+      }
+
+      // Should remove both plugin dir and credentials dir
+      expect(mockFs.rmSync).toHaveBeenCalledWith('/home/user/.carapace/plugins/my-plugin', {
+        recursive: true,
+        force: true,
+      });
+      expect(mockFs.rmSync).toHaveBeenCalledWith(
+        '/home/user/.carapace/credentials/plugins/my-plugin',
+        {
+          recursive: true,
+          force: true,
+        },
+      );
+    });
+
+    it('should reject removal of built-in plugins', async () => {
+      const result = await handler.handleToolInvocation(
+        'plugin_remove',
+        { name: 'installer' },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('Cannot remove built-in');
+      }
+    });
+
+    it('should return error when plugin does not exist', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((): boolean => false),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_remove',
+        { name: 'nonexistent' },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('not found');
+      }
+    });
+
+    it('should return error when name is missing', async () => {
+      const result = await handler.handleToolInvocation('plugin_remove', {}, context);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('name');
+      }
+    });
+  });
+
+  // =======================================================================
+  // plugin_update
+  // =======================================================================
+
+  describe('plugin_update', () => {
+    it('should fetch, checkout, re-sanitize, and re-validate on update', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((p: string): boolean => {
+          if (p === '/home/user/.carapace/plugins/my-plugin') return true;
+          if (p === '/home/user/.carapace/plugins/my-plugin/.git') return true;
+          return false;
+        }),
+        readFileSync: vi.fn((): string => validManifestJson()),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_update',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['plugin_name']).toBe('my-plugin');
+        expect(result.result['old_version']).toBe('1.0.0');
+        expect(result.result['new_version']).toBe('1.0.0');
+        expect(result.result['requires_restart']).toBe(true);
+      }
+
+      // Verify fetch was called
+      expect(deps.gitOps.fetch).toHaveBeenCalledWith('/home/user/.carapace/plugins/my-plugin');
+
+      // Verify getDefaultBranch was called
+      expect(deps.gitOps.getDefaultBranch).toHaveBeenCalledWith(
+        '/home/user/.carapace/plugins/my-plugin',
+      );
+
+      // Verify checkout was called with origin/main
+      expect(deps.gitOps.checkout).toHaveBeenCalledWith(
+        '/home/user/.carapace/plugins/my-plugin',
+        'origin/main',
+      );
+
+      // Verify re-sanitize was called
+      expect(mockSanitize).toHaveBeenCalledWith(
+        '/home/user/.carapace/plugins/my-plugin',
+        mockSanitizerFs,
+        deps.gitOps,
+      );
+    });
+
+    it('should detect new credential requirements after update', async () => {
+      let callCount = 0;
+      mockFs = createMockFs({
+        existsSync: vi.fn((p: string): boolean => {
+          if (p === '/home/user/.carapace/plugins/my-plugin') return true;
+          if (p === '/home/user/.carapace/plugins/my-plugin/.git') return true;
+          return false;
+        }),
+        readFileSync: vi.fn((): string => {
+          callCount++;
+          // First call reads old manifest, second reads new (updated) manifest
+          if (callCount <= 1) return validManifestJson();
+          return updatedManifestWithNewCreds();
+        }),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_update',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['old_version']).toBe('1.0.0');
+        expect(result.result['new_version']).toBe('2.0.0');
+
+        const newCreds = result.result['new_credentials_needed'] as Array<Record<string, unknown>>;
+        expect(newCreds).toHaveLength(1);
+        expect(newCreds[0]!['key']).toBe('new_token');
+        expect(newCreds[0]!['required']).toBe(true);
+        expect(newCreds[0]!['obtain_url']).toBe('https://example.com/tokens');
+        expect(newCreds[0]!['file']).toBe(
+          '/home/user/.carapace/credentials/plugins/my-plugin/new_token',
+        );
+      }
+    });
+
+    it('should return error when plugin has no .git directory', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((p: string): boolean => {
+          if (p === '/home/user/.carapace/plugins/manual-plugin') return true;
+          if (p === '/home/user/.carapace/plugins/manual-plugin/.git') return false;
+          return false;
+        }),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_update',
+        { name: 'manual-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('not installed via git');
+      }
+    });
+
+    it('should return error when plugin does not exist', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((): boolean => false),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_update',
+        { name: 'nonexistent' },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('not found');
+      }
+    });
+
+    it('should return error when fetch fails', async () => {
+      const gitOps = createMockGitOps();
+      (gitOps.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Network error'));
+      deps = createDeps({ gitOps });
+      mockFs = createMockFs({
+        existsSync: vi.fn((p: string): boolean => {
+          if (p === '/home/user/.carapace/plugins/my-plugin') return true;
+          if (p === '/home/user/.carapace/plugins/my-plugin/.git') return true;
+          return false;
+        }),
+        readFileSync: vi.fn((): string => validManifestJson()),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_update',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain('Fetch failed');
+        expect(result.error.retriable).toBe(true);
+      }
+    });
+
+    it('should return error when name is missing', async () => {
+      const result = await handler.handleToolInvocation('plugin_update', {}, context);
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('name');
+      }
+    });
+
+    it('should return error when sanitizer rejects after update', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((p: string): boolean => {
+          if (p === '/home/user/.carapace/plugins/my-plugin') return true;
+          if (p === '/home/user/.carapace/plugins/my-plugin/.git') return true;
+          return false;
+        }),
+        readFileSync: vi.fn((): string => validManifestJson()),
+      });
+      mockSanitize = vi.fn(
+        async (): Promise<SanitizationResult> => ({
+          hooksRemoved: 0,
+          configKeysStripped: [],
+          rejected: true,
+          rejectionReasons: ['Contains symlinks'],
+        }),
+      );
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_update',
+        { name: 'my-plugin' },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain('Updated repository rejected');
+        expect(result.error.message).toContain('Contains symlinks');
+      }
+    });
+  });
+
+  // =======================================================================
+  // plugin_configure
+  // =======================================================================
+
+  describe('plugin_configure', () => {
+    it('should write config.json with the specified key/value', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((p: string): boolean => {
+          if (p === '/home/user/.carapace/plugins/my-plugin') return true;
+          if (p.endsWith('manifest.json')) return true;
+          if (p.endsWith('config.json')) return false;
+          return false;
+        }),
+        readFileSync: vi.fn((): string => validManifestWithConfig()),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_configure',
+        { name: 'my-plugin', key: 'email', value: 'user@example.com' },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['plugin_name']).toBe('my-plugin');
+        expect(result.result['key']).toBe('email');
+        expect(result.result['value']).toBe('user@example.com');
+      }
+
+      // Verify config.json was written
+      expect(mockFs.writeFileSync).toHaveBeenCalledWith(
+        '/home/user/.carapace/plugins/my-plugin/config.json',
+        JSON.stringify({ email: 'user@example.com' }, null, 2),
+        'utf-8',
+      );
+    });
+
+    it('should merge with existing config.json', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((p: string): boolean => {
+          if (p === '/home/user/.carapace/plugins/my-plugin') return true;
+          if (p.endsWith('config.json')) return true;
+          return true;
+        }),
+        readFileSync: vi.fn((p: string): string => {
+          if (p.endsWith('config.json')) return JSON.stringify({ email: 'old@example.com' });
+          return validManifestWithConfig();
+        }),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_configure',
+        { name: 'my-plugin', key: 'max_retries', value: 5 },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+
+      // Verify config.json preserves existing values
+      expect(mockFs.writeFileSync).toHaveBeenCalledWith(
+        '/home/user/.carapace/plugins/my-plugin/config.json',
+        JSON.stringify({ email: 'old@example.com', max_retries: 5 }, null, 2),
+        'utf-8',
+      );
+    });
+
+    it('should reject unknown config keys', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((): boolean => true),
+        readFileSync: vi.fn((): string => validManifestWithConfig()),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_configure',
+        { name: 'my-plugin', key: 'nonexistent_key', value: 'foo' },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('Unknown config key');
+        expect(result.error.message).toContain('nonexistent_key');
+        expect(result.error.message).toContain('email');
+      }
+    });
+
+    it('should reject value with wrong type', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((): boolean => true),
+        readFileSync: vi.fn((): string => validManifestWithConfig()),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_configure',
+        { name: 'my-plugin', key: 'email', value: 123 },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('must be of type "string"');
+      }
+    });
+
+    it('should reject when plugin has no config_schema', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((): boolean => true),
+        readFileSync: vi.fn((): string => validManifestJson()),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_configure',
+        { name: 'my-plugin', key: 'email', value: 'user@example.com' },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('does not declare a config_schema');
+      }
+    });
+
+    it('should return error when plugin does not exist', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((): boolean => false),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_configure',
+        { name: 'nonexistent', key: 'email', value: 'user@example.com' },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('not found');
+      }
+    });
+
+    it('should return error when name is missing', async () => {
+      const result = await handler.handleToolInvocation(
+        'plugin_configure',
+        { key: 'email', value: 'user@example.com' },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('name');
+      }
+    });
+
+    it('should return error when key is missing', async () => {
+      const result = await handler.handleToolInvocation(
+        'plugin_configure',
+        { name: 'my-plugin', value: 'foo' },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('key');
+      }
+    });
+
+    it('should return error when value is missing', async () => {
+      const result = await handler.handleToolInvocation(
+        'plugin_configure',
+        { name: 'my-plugin', key: 'email' },
+        context,
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe(ErrorCode.VALIDATION_FAILED);
+        expect(result.error.message).toContain('value');
+      }
+    });
+
+    it('should accept boolean values for boolean config keys', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((p: string): boolean => {
+          if (p === '/home/user/.carapace/plugins/my-plugin') return true;
+          if (p.endsWith('config.json')) return false;
+          return true;
+        }),
+        readFileSync: vi.fn((): string => validManifestWithConfig()),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_configure',
+        { name: 'my-plugin', key: 'enabled', value: true },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['value']).toBe(true);
+      }
+    });
+
+    it('should accept number values for number config keys', async () => {
+      mockFs = createMockFs({
+        existsSync: vi.fn((p: string): boolean => {
+          if (p === '/home/user/.carapace/plugins/my-plugin') return true;
+          if (p.endsWith('config.json')) return false;
+          return true;
+        }),
+        readFileSync: vi.fn((): string => validManifestWithConfig()),
+      });
+      handler = new InstallerHandler(deps, mockFs, mockSanitize, mockSanitizerFs);
+      await handler.initialize(createServices());
+
+      const result = await handler.handleToolInvocation(
+        'plugin_configure',
+        { name: 'my-plugin', key: 'max_retries', value: 3 },
+        context,
+      );
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result['value']).toBe(3);
       }
     });
   });
