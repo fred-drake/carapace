@@ -137,10 +137,15 @@ export class ContainerLifecycleManager {
       hasStdinData: !!request.stdinData,
     });
 
+    // Apple Containers --read-only is more restrictive than Docker's (blocks all
+    // writes including tmpfs). Disable it for now until explicit writable mounts
+    // cover all paths Claude Code needs.
+    const useReadOnly = this.runtime.name !== 'apple-container';
+
     const runOptions: ContainerRunOptions = {
       image: request.image,
       name: containerName,
-      readOnly: true,
+      readOnly: useReadOnly,
       networkDisabled: !this.networkName,
       network: this.networkName,
       volumes: this.buildVolumes(request),
@@ -171,6 +176,7 @@ export class ContainerLifecycleManager {
         eventBus: this.eventBus,
         claudeSessionStore: this.claudeSessionStore,
         sanitizer: this.responseSanitizer,
+        logger: this.logger,
       });
       reader.start(handle.stdout, {
         sessionId: session.sessionId,
