@@ -1,0 +1,103 @@
+{
+  "description": "Plugin installation, management, and configuration for Carapace",
+  "version": "0.1.0",
+  "app_compat": ">=0.1.0",
+  "author": { "name": "Carapace Core" },
+  "provides": {
+    "channels": [],
+    "tools": [
+      {
+        "name": "plugin_install",
+        "description": "Install a plugin from a git repository URL",
+        "risk_level": "high",
+        "arguments_schema": {
+          "type": "object",
+          "required": ["url"],
+          "additionalProperties": false,
+          "properties": {
+            "url": { "type": "string", "description": "Git repository URL (https:// or git@)" },
+            "name": {
+              "type": "string",
+              "description": "Override the default plugin name derived from the URL"
+            }
+          }
+        }
+      },
+      {
+        "name": "plugin_verify",
+        "description": "Verify a plugin's credentials and configuration are properly set up",
+        "risk_level": "low",
+        "arguments_schema": {
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "description": "The installed plugin name to verify" }
+          }
+        }
+      },
+      {
+        "name": "plugin_list",
+        "description": "List all installed and built-in plugins",
+        "risk_level": "low",
+        "arguments_schema": {
+          "type": "object",
+          "required": [],
+          "additionalProperties": false,
+          "properties": {
+            "include_builtin": {
+              "type": "boolean",
+              "description": "Include built-in plugins in the list"
+            }
+          }
+        }
+      },
+      {
+        "name": "plugin_remove",
+        "description": "Remove an installed plugin",
+        "risk_level": "high",
+        "arguments_schema": {
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "description": "The plugin name to remove" },
+            "remove_credentials": {
+              "type": "boolean",
+              "description": "Also remove stored credential files"
+            }
+          }
+        }
+      },
+      {
+        "name": "plugin_update",
+        "description": "Update a git-installed plugin to the latest version",
+        "risk_level": "high",
+        "arguments_schema": {
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "description": "The plugin name to update" }
+          }
+        }
+      },
+      {
+        "name": "plugin_configure",
+        "description": "Set a non-secret configuration value for a plugin",
+        "risk_level": "low",
+        "arguments_schema": {
+          "type": "object",
+          "required": ["name", "key", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "description": "The plugin name to configure" },
+            "key": { "type": "string", "description": "The configuration key to set" },
+            "value": { "type": "string", "description": "The configuration value" }
+          }
+        }
+      }
+    ]
+  },
+  "subscribes": []
+}
