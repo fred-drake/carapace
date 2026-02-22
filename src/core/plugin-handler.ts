@@ -174,6 +174,17 @@ export type ToolInvocationResult =
   | { ok: false; error: ErrorPayload };
 
 // ---------------------------------------------------------------------------
+// PluginVerifyResult
+// ---------------------------------------------------------------------------
+
+/** Result of a plugin's optional verify() smoke test. */
+export interface PluginVerifyResult {
+  ok: boolean;
+  message: string;
+  detail?: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
 // PluginHandler
 // ---------------------------------------------------------------------------
 
@@ -186,6 +197,7 @@ export type ToolInvocationResult =
  * - `handleToolInvocation` processes tool calls from the container.
  * - `handleEvent` (optional) reacts to PUB/SUB events.
  * - `resolveSession` (optional) selects a session for `explicit` policy.
+ * - `verify` (optional) runs a smoke test after credential checks.
  * - `shutdown` is called during graceful teardown.
  */
 export interface PluginHandler {
@@ -203,6 +215,12 @@ export interface PluginHandler {
    * declares `session: "explicit"`.
    */
   resolveSession?(event: EventEnvelope, sessions: SessionLookup): Promise<string | null>;
+  /**
+   * Optional smoke test. Called by the installer's plugin_verify tool
+   * after credential checks pass. Must complete within 10 seconds.
+   * Should not perform destructive operations.
+   */
+  verify?(): Promise<PluginVerifyResult>;
   shutdown(): Promise<void>;
 }
 
