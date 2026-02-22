@@ -120,6 +120,51 @@ describe('MANIFEST_JSON_SCHEMA', () => {
       expect(validate.errors).toBeNull();
       expect(valid).toBe(true);
     });
+
+    it('accepts a manifest with allowed_groups', () => {
+      const validate = createValidator();
+      const valid = validate({
+        ...remindersManifest(),
+        allowed_groups: ['home-automation', 'personal'],
+      });
+      expect(validate.errors).toBeNull();
+      expect(valid).toBe(true);
+    });
+
+    it('accepts a manifest with install.credentials', () => {
+      const validate = createValidator();
+      const valid = validate({
+        ...remindersManifest(),
+        install: {
+          credentials: [
+            {
+              key: 'API_KEY',
+              description: 'Your API key',
+              required: true,
+              obtain_url: 'https://example.com/keys',
+              format_hint: 'sk-...',
+            },
+            {
+              key: 'WEBHOOK_SECRET',
+              description: 'Optional webhook secret',
+              required: false,
+            },
+          ],
+        },
+      });
+      expect(validate.errors).toBeNull();
+      expect(valid).toBe(true);
+    });
+
+    it('accepts a manifest with install and empty credentials array', () => {
+      const validate = createValidator();
+      const valid = validate({
+        ...remindersManifest(),
+        install: { credentials: [] },
+      });
+      expect(validate.errors).toBeNull();
+      expect(valid).toBe(true);
+    });
   });
 
   describe('invalid manifests', () => {
@@ -177,6 +222,72 @@ describe('MANIFEST_JSON_SCHEMA', () => {
       const validate = createValidator();
       const manifest = remindersManifest();
       (manifest.provides.tools[0] as Record<string, unknown>).risk_level = 'medium';
+
+      expect(validate(manifest)).toBe(false);
+    });
+
+    it('rejects install.credentials with missing required fields', () => {
+      const validate = createValidator();
+      const manifest = {
+        ...remindersManifest(),
+        install: {
+          credentials: [
+            {
+              key: 'API_KEY',
+              // missing 'description' and 'required'
+            },
+          ],
+        },
+      };
+
+      expect(validate(manifest)).toBe(false);
+      expect(validate.errors).not.toBeNull();
+    });
+
+    it('rejects install with extra properties', () => {
+      const validate = createValidator();
+      const manifest = {
+        ...remindersManifest(),
+        install: {
+          credentials: [],
+          unexpected_field: 'nope',
+        },
+      };
+
+      expect(validate(manifest)).toBe(false);
+      expect(validate.errors!.some((e: ErrorObject) => e.keyword === 'additionalProperties')).toBe(
+        true,
+      );
+    });
+
+    it('rejects credential spec with extra properties', () => {
+      const validate = createValidator();
+      const manifest = {
+        ...remindersManifest(),
+        install: {
+          credentials: [
+            {
+              key: 'API_KEY',
+              description: 'Your API key',
+              required: true,
+              unexpected_field: 'nope',
+            },
+          ],
+        },
+      };
+
+      expect(validate(manifest)).toBe(false);
+      expect(validate.errors!.some((e: ErrorObject) => e.keyword === 'additionalProperties')).toBe(
+        true,
+      );
+    });
+
+    it('rejects install without credentials array', () => {
+      const validate = createValidator();
+      const manifest = {
+        ...remindersManifest(),
+        install: {},
+      };
 
       expect(validate(manifest)).toBe(false);
     });

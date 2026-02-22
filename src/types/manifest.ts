@@ -68,6 +68,22 @@ export interface ToolDeclaration {
 }
 
 // ---------------------------------------------------------------------------
+// Install spec (credentials a plugin needs from the user)
+// ---------------------------------------------------------------------------
+
+export interface CredentialSpec {
+  key: string;
+  description: string;
+  required: boolean;
+  obtain_url?: string;
+  format_hint?: string;
+}
+
+export interface InstallSpec {
+  credentials: CredentialSpec[];
+}
+
+// ---------------------------------------------------------------------------
 // Plugin manifest (top-level shape of manifest.json)
 // ---------------------------------------------------------------------------
 
@@ -97,6 +113,11 @@ export interface PluginManifest {
    * - `"explicit"`: Plugin provides a `resolveSession()` handler.
    */
   session?: SessionPolicy;
+  /**
+   * Install spec declaring credentials and other setup requirements.
+   * Used by `carapace plugin install` to prompt users for required credentials.
+   */
+  install?: InstallSpec;
   config_schema?: {
     type: string;
     required?: string[];

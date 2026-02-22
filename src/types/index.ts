@@ -37,6 +37,8 @@ export {
   type JsonSchemaProperty,
   type JsonSchema,
   type ToolDeclaration,
+  type CredentialSpec,
+  type InstallSpec,
   type PluginManifest,
 } from './manifest.js';
 
