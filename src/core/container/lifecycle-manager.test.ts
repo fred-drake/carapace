@@ -738,4 +738,36 @@ describe('ContainerLifecycleManager', () => {
       expect(emailVolume!.source).not.toBe(slackVolume!.source);
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Skills directory mount
+  // -----------------------------------------------------------------------
+
+  describe('skillsDir', () => {
+    it('mounts skillsDir as a read-only volume when provided', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(defaultSpawnRequest({ skillsDir: '/home/.carapace/run/skills' }));
+
+      const callOptions = runSpy.mock.calls[0][0];
+      const skillsVolume = callOptions.volumes.find(
+        (v: { target: string }) => v.target === '/skills',
+      );
+      expect(skillsVolume).toBeDefined();
+      expect(skillsVolume!.source).toBe('/home/.carapace/run/skills');
+      expect(skillsVolume!.readonly).toBe(true);
+    });
+
+    it('does not mount /skills volume when skillsDir is not provided', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(defaultSpawnRequest());
+
+      const callOptions = runSpy.mock.calls[0][0];
+      const skillsVolume = callOptions.volumes.find(
+        (v: { target: string }) => v.target === '/skills',
+      );
+      expect(skillsVolume).toBeUndefined();
+    });
+  });
 });

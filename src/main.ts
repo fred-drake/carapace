@@ -183,16 +183,20 @@ function createStartServer(
   const pluginsDir = join(home, 'plugins');
   const promptsDir = join(home, 'run', 'prompts');
   const credentialsDir = join(home, 'credentials');
+  const skillsDir = join(home, 'run', 'skills');
+  const builtinPluginsDir = join(home, 'lib', 'plugins');
 
   const config: ServerConfig = {
     socketDir,
     pluginsDir,
+    builtinPluginsDir,
     promptsDir,
     credentialsDir,
     containerImage: readCurrentImageTag(home),
     claudeStateDir: join(home, 'data', 'claude-state'),
     sessionDbPath: join(home, 'data', 'claude-sessions.sqlite'),
     networkName: 'default',
+    skillsDir,
   };
 
   const deps: ServerDeps = {

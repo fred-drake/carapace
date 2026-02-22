@@ -33,6 +33,7 @@ import { EventDispatcher } from './event-dispatcher.js';
 import { ClaudeSessionStore, CLAUDE_SESSION_MIGRATIONS } from './claude-session-store.js';
 import { readCredentialStdin, type CredentialFs } from './credential-reader.js';
 import { createLogger, type Logger } from './logger.js';
+import { SkillLoader } from './skill-loader.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -64,6 +65,8 @@ export interface ServerConfig {
   sessionDbPath?: string;
   /** Container network name (e.g. 'bridge'). When set, containers have network access. */
   networkName?: string;
+  /** Aggregated skills output directory ($CARAPACE_HOME/run/skills/). */
+  skillsDir?: string;
 }
 
 /** Minimal filesystem interface for prompt file watching. */
@@ -119,6 +122,7 @@ export class Server {
   private eventDispatcher: EventDispatcher | null = null;
   private eventSubscription: SubscriptionHandle | null = null;
   private claudeSessionStore: ClaudeSessionStore | null = null;
+  private skillLoader: SkillLoader | null = null;
   private promptPollTimer: ReturnType<typeof setInterval> | null = null;
   private started = false;
 
@@ -245,6 +249,16 @@ export class Server {
       const claudeSessionStore = this.claudeSessionStore;
       const pFs = this.promptFs;
 
+      // Create SkillLoader for aggregating skills before spawn
+      if (config.skillsDir) {
+        this.skillLoader = new SkillLoader({
+          pluginsDir: config.pluginsDir,
+          builtinPluginsDir: config.builtinPluginsDir,
+          skillsOutputDir: config.skillsDir,
+        });
+      }
+      const skillLoader = this.skillLoader;
+
       this.eventDispatcher = new EventDispatcher({
         logger: this.logger.child('event-dispatcher'),
         getActiveSessionCount: (group) =>
@@ -269,6 +283,11 @@ export class Server {
             }
           }
 
+          // Aggregate skills before each container spawn
+          if (skillLoader) {
+            await skillLoader.aggregateSkills();
+          }
+
           const managed = await lifecycleManager.spawn({
             group,
             image: config.containerImage ?? 'carapace-agent:latest',
@@ -277,6 +296,7 @@ export class Server {
             env,
             stdinData,
             claudeStatePath,
+            skillsDir: config.skillsDir,
           });
           return managed.session.sessionId;
         },
@@ -383,6 +403,7 @@ export class Server {
       this.lifecycleManager = null;
     }
     this.eventDispatcher = null;
+    this.skillLoader = null;
 
     // 4a. Close ClaudeSessionStore database
     if (this.claudeSessionStore) {

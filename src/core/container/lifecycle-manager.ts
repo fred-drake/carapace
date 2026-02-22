@@ -73,6 +73,14 @@ export interface SpawnRequest {
    * to prevent cross-group session data leakage (security P0).
    */
   claudeStatePath?: string;
+  /**
+   * Host-side path to the aggregated skills directory.
+   *
+   * Mounted as read-only at `/skills` inside the container. Contains
+   * namespaced skill files from all plugins (built-in + user).
+   * Set to `$CARAPACE_HOME/run/skills/` by the server.
+   */
+  skillsDir?: string;
 }
 
 /** A container managed by the lifecycle manager. */
@@ -339,6 +347,14 @@ export class ContainerLifecycleManager {
         source: request.claudeStatePath,
         target: '/.claude',
         readonly: false,
+      });
+    }
+
+    if (request.skillsDir) {
+      volumes.push({
+        source: request.skillsDir,
+        target: '/skills',
+        readonly: true,
       });
     }
 
