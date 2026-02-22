@@ -2624,6 +2624,398 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
 
 ---
 
+## Phase INST — Plugin Installation System
+
+> Added 2026-02-22. A built-in plugin that installs other plugins from git
+> repositories, with LLM-guided credential setup (guide + verify, never
+> collect) and direct clone into `$CARAPACE_HOME/plugins/{name}/`.
+>
+> Architecture decisions:
+>
+> - Direct `git clone` into plugins dir (keep `.git/` for updates)
+> - Credentials bypass the LLM — user creates files, LLM guides + verifies
+> - Installer is a built-in plugin (ships with Carapace, non-removable)
+> - No SQLite registry — filesystem + git metadata is the source of truth
+
+### INST-01: Extend manifest types with `install.credentials`
+
+- **Priority**: P1 | **Complexity**: S | **Role**: Engineer
+- **Depends on**: None
+- **Description**: Add `CredentialSpec`, `InstallSpec`, and optional `install?`
+  field to `PluginManifest` in `src/types/manifest.ts`. Add corresponding
+  JSON Schema definitions to `src/types/manifest-schema.ts` so manifests
+  declaring `install.credentials` pass Ajv validation. Fields per credential:
+  `key` (string, required), `description` (string, required), `required`
+  (boolean), `obtain_url` (string, optional), `format_hint` (string, optional).
+  Also fix pre-existing gap: add `allowed_groups` to the JSON Schema
+  `properties` (it exists on the TypeScript type at manifest.ts:90 but is
+  missing from the schema — fix while adding `install`).
+- **Acceptance criteria**: Manifests with `install` block validate. Manifests
+  without `install` block still validate (backward compatible). `allowed_groups`
+  is now accepted by the JSON Schema. Type-check passes. Existing manifest
+  tests still pass.
+- **Files**: `src/types/manifest.ts`, `src/types/manifest-schema.ts`
+
+### INST-02: Add `readCredential()` to CoreServices and wire into PluginLoader
+
+- **Priority**: P1 | **Complexity**: S | **Role**: Engineer
+- **Depends on**: None
+- **Description**: Add `readCredential(key: string): string` method to
+  `CoreServices` in `src/core/plugin-handler.ts`. This reads from
+  `$CARAPACE_HOME/credentials/plugins/{pluginName}/{key}` using the existing
+  `readCredentialFile()` from `credential-dir-security.ts` (which rejects
+  symlinks). The plugin name is hard-coded at init time — plugins cannot
+  read other plugins' credentials. Add `credentialsDir` parameter to
+  `PluginLoader` constructor, wire it in `initializeWithTimeout()`. Thread
+  `credentialsDir` through `createStartServer()` in `main.ts`.
+- **Acceptance criteria**: `services.readCredential('FOO')` reads the correct
+  scoped file. Invalid keys (containing `/`, `..`) throw. Missing files throw
+  with actionable error message. Type-check passes.
+- **Files**: `src/core/plugin-handler.ts`, `src/core/plugin-loader.ts`,
+  `src/main.ts`
+
+### INST-03: Add `credentials/plugins` to CARAPACE_SUBDIRS
+
+- **Priority**: P1 | **Complexity**: S | **Role**: Engineer
+- **Depends on**: None
+- **Description**: Add `'credentials/plugins'` to `CARAPACE_SUBDIRS` in
+  `src/types/config.ts`. Add it to `RESTRICTED_DIRS` so it gets 0700
+  permissions. Add to `MUTABLE_SUBDIRS`. Verify that the existing
+  `verifyCredentialDirectory()` in `credential-dir-security.ts` recursively
+  validates subdirectories under `credentials/plugins/` (it should already —
+  confirm with a test).
+  Also add `'run/skills'` to `CARAPACE_SUBDIRS` and `MUTABLE_SUBDIRS`
+  (needed by INST-14 for skills aggregation).
+- **Acceptance criteria**: `ensureDirectoryStructure()` creates
+  `credentials/plugins/` with 0700. `credentials/plugins` is in
+  `RESTRICTED_DIRS` set. Verify with a test that `ensureDirectoryStructure()`
+  applies 0700 to the created directory (not inherited from parent).
+  `run/skills/` is created. Existing credential security tests pass.
+- **Files**: `src/types/config.ts`
+
+### INST-04: Add optional `verify()` to PluginHandler interface
+
+- **Priority**: P1 | **Complexity**: S | **Role**: Engineer
+- **Depends on**: None
+- **Description**: Add optional `verify?(): Promise<PluginVerifyResult>` to
+  `PluginHandler` in `src/core/plugin-handler.ts`. Define `PluginVerifyResult`
+  as `{ ok: boolean; message: string; detail?: Record<string, unknown> }`.
+  This is a lightweight smoke test that plugin handlers can optionally
+  implement. Called by the installer's `plugin_verify` tool after credential
+  checks pass. Must complete within 10 seconds. Should not perform
+  destructive operations.
+- **Acceptance criteria**: Existing handlers still compile (method is optional).
+  Type exports are correct. Type-check passes.
+- **Files**: `src/core/plugin-handler.ts`
+
+### INST-05: Implement GitOps interface and RealGitOps
+
+- **Priority**: P1 | **Complexity**: M | **Role**: Engineer
+- **Depends on**: None
+- **Description**: Create `src/plugins/installer/git-ops.ts` with a `GitOps`
+  interface and `RealGitOps` implementation. Methods: `clone()` (with
+  `--depth=1`, `--single-branch`, `--config core.hooksPath=/dev/null`,
+  `--config core.symlinks=false`), `fetch()`, `checkout()`, `getRemoteUrl()`,
+  `getCurrentRef()`, `getDefaultBranch()`, `configUnset()`, `configList()`.
+  Uses `child_process.execFile` (never `exec`) with 60s timeout and 1MB
+  output buffer. URL validation: only `https://` and `git@` protocols.
+  Reject `file://`, `http://`, `ftp://`, and URLs with shell metacharacters.
+- **Acceptance criteria**: Unit tests cover happy paths and error cases.
+  Mock-friendly interface for QA. `execFile` used throughout (no shell
+  injection surface). Type-check passes.
+- **Files**: `src/plugins/installer/git-ops.ts`,
+  `src/plugins/installer/git-ops.test.ts`
+
+### INST-06: Implement git-sanitizer module
+
+- **Priority**: P1 | **Complexity**: S | **Role**: Security
+- **Depends on**: INST-05
+- **Description**: Create `src/plugins/installer/git-sanitizer.ts` with
+  `sanitizeClonedRepo()` function. Four phases: (1) Remove all files from
+  `.git/hooks/` directory. (2) Scan `.git/config` for dangerous keys
+  (`core.fsmonitor`, `core.hooksPath`, `core.sshCommand`, `core.pager`,
+  `core.editor`, `diff.external`, `filter.*.clean`, `filter.*.smudge`,
+  `filter.*.process`, `credential.helper`) and unset them. (3) Reject
+  repos with `.gitmodules` file (submodules bypass URL validation). (4)
+  Scan working tree for symlinks and reject if found (belt-and-suspenders
+  even with `core.symlinks=false`). Injectable `SanitizerFs` and
+  `SanitizerGit` interfaces for testing. Returns `SanitizationResult`
+  with counts of hooks removed, config keys stripped, and rejection reasons.
+- **Acceptance criteria**: Hooks directory is emptied. Dangerous config keys
+  (including `core.pager` and `core.editor`) are removed. Safe config keys
+  are preserved. Repos with `.gitmodules` are rejected. Repos with symlinks
+  in working tree are rejected. Works on repos with no hooks (no-op). Full
+  unit test coverage. Type-check passes.
+- **Files**: `src/plugins/installer/git-sanitizer.ts`,
+  `src/plugins/installer/git-sanitizer.test.ts`
+
+### INST-07: Implement InstallerHandler — plugin_install tool
+
+- **Priority**: P1 | **Complexity**: M | **Role**: Engineer
+- **Depends on**: INST-01, INST-03, INST-05, INST-06
+- **Description**: Create `src/plugins/installer/handler.ts` implementing
+  `PluginHandler`. The InstallerHandler is a special built-in that gets
+  constructed with paths by a factory (not discovered from disk). Use a
+  `registerBuiltinHandler(name, handler, manifest)` pattern on PluginLoader
+  so the handler receives its deps directly (`pluginsDir`, `credentialsDir`,
+  `gitOps`, `sanitizer`, `getLoadedHandler`). This keeps installer-specific
+  concerns out of CoreServices. Implement `plugin_install` tool: validate
+  plugin name (`^[a-z][a-z0-9_-]*$` — lowercase, starts with letter), check
+  for name collision against existing dirs,
+  call `gitOps.clone()`, call `sanitizeClonedRepo()`, validate manifest
+  against `MANIFEST_JSON_SCHEMA`, read `install.credentials` and return
+  them as `credentials_needed` in the result with file paths using
+  `$CARAPACE_HOME` placeholder. On any post-clone failure, `rmSync` the
+  directory. Derive plugin name from URL (strip `.git` suffix, use last
+  path segment) with optional user override. Reserved names check against
+  built-in plugin names set.
+- **Acceptance criteria**: Successful install returns plugin name, version,
+  tools, credential instructions. Failed clone cleans up completely. Invalid
+  manifest cleans up completely. Name conflicts return actionable error.
+  Full unit tests with mocked GitOps and fs. Type-check passes.
+- **Files**: `src/plugins/installer/handler.ts`,
+  `src/plugins/installer/handler.test.ts`
+
+### INST-08: Implement InstallerHandler — plugin_verify tool
+
+- **Priority**: P1 | **Complexity**: M | **Role**: Engineer
+- **Depends on**: INST-07, INST-04
+- **Description**: Add `plugin_verify` to InstallerHandler. Two phases:
+  Phase 1 (always): Read `install.credentials` from manifest, check each
+  credential file exists at `$CARAPACE_HOME/credentials/plugins/{name}/{key}`,
+  verify not a symlink, verify 0600 permissions, verify non-empty. NEVER
+  read file contents. Phase 2 (if handler loaded + implements `verify()`):
+  Call `handler.verify()` with 10s timeout. Return structured result with
+  `ready` boolean, per-credential status, and smoke test result. Response
+  MUST NOT contain credential values — run through `ResponseSanitizer` as
+  defense-in-depth.
+- **Acceptance criteria**: Verify passes when all creds present with correct
+  perms. Verify fails with specific messages for missing/wrong-perms files.
+  Smoke test runs when handler loaded. The `detail` field from
+  `handler.verify()` is explicitly passed through `ResponseSanitizer.sanitize()`
+  before inclusion in the tool response. No credential values in any response
+  field. Type-check passes.
+- **Files**: `src/plugins/installer/handler.ts`,
+  `src/plugins/installer/handler.test.ts`
+
+### INST-09: Implement InstallerHandler — plugin_list, plugin_remove, plugin_update, plugin_configure
+
+- **Priority**: P1 | **Complexity**: M | **Role**: Engineer
+- **Depends on**: INST-07
+- **Description**: Implement remaining four tools in InstallerHandler.
+  `plugin_list`: Scan userPluginsDir for directories with manifest.json,
+  detect `.git/` presence, read version from manifest, optionally include
+  built-in names. `plugin_remove`: Reject built-in names, rmSync plugin
+  dir, retain credential files by default (mention in response message),
+  return requires_restart. `plugin_update`: Verify `.git/` exists, call
+  `gitOps.fetch()` + `gitOps.checkout()`, call `sanitizeClonedRepo()`,
+  re-validate manifest, return new version + requires_restart. If the
+  updated manifest declares credential slots not present in the previous
+  version, include `new_credentials_needed` with instructions in the
+  response. `plugin_configure`: Write non-secret configuration values
+  (validated against the plugin's `config_schema`) to
+  `$CARAPACE_HOME/plugins/{name}/config.json`. This is `risk_level: "low"`
+  — only for non-secret config like preferences, not credentials.
+- **Acceptance criteria**: List shows installed + built-in plugins. Remove
+  cleans up plugin dir. Remove rejects built-in names. Update works on
+  git-installed plugins. Update re-sanitizes hooks. Update re-validates
+  manifest. Update reports new credential requirements. Configure writes
+  config.json validated against config_schema. All with full unit test
+  coverage. Type-check passes.
+- **Files**: `src/plugins/installer/handler.ts`,
+  `src/plugins/installer/handler.test.ts`
+
+### INST-10: Create installer plugin manifest and skill file
+
+- **Priority**: P1 | **Complexity**: S | **Role**: DX Advocate
+- **Depends on**: INST-07
+- **Description**: Create `src/plugins/installer/manifest.json` declaring
+  6 tools (plugin_install high, plugin_verify low, plugin_list low,
+  plugin_remove high, plugin_update high, plugin_configure low). All
+  argument schemas have `additionalProperties: false`. Create
+  `src/plugins/installer/skills/installer.md` teaching the LLM:
+  (1) how to install plugins and read credential instructions from the
+  response, (2) how to guide users to create credential files (NEVER
+  ask for values in chat), (3) how to verify setup, (4) how to
+  list/remove/update, (5) how to set non-secret config values. Include
+  explicit instruction: "Never ask the user to paste credentials into
+  this conversation." Skill file must contain a prominent security
+  section instructing the LLM to never collect, request, or echo
+  credential values.
+- **Acceptance criteria**: Manifest passes existing `MANIFEST_JSON_SCHEMA`
+  validation. Manifest declares exactly 6 tools. Skill file follows
+  existing skill conventions (see `src/plugins/memory/skills/memory.md`
+  for reference). Skill file contains a `## Security` section with
+  credential bypass instructions. Type-check passes.
+- **Files**: `src/plugins/installer/manifest.json`,
+  `src/plugins/installer/skills/installer.md`
+
+### INST-11: Security tests — credential bypass and clone safety
+
+- **Priority**: P1 | **Complexity**: M | **Role**: QA
+- **Depends on**: INST-08, INST-06
+- **Description**: Create security test suite for the installer. Key tests:
+  (1) Credential bypass: capture all tool responses from install + verify
+  flows, assert NONE contain credential values using `assertNoCredentialLeak()`
+  pattern + `ResponseSanitizer`. (2) Clone safety: verify `execFile` used
+  (not `exec`), verify URL protocol restriction, verify shell metacharacter
+  rejection, verify hook stripping, verify git config sanitization,
+  verify `.gitmodules` rejection, verify symlink scanning. (3)
+  Plugin name: verify `../` rejection, null byte rejection, reserved name
+  rejection, collision detection, pattern enforcement (`^[a-z][a-z0-9_-]*$`).
+  (4) Cleanup: verify post-clone validation failure removes the entire
+  directory. (5) Update flow security: verify update re-runs sanitizer,
+  verify pull does not re-introduce hooks, verify new credential detection
+  on manifest change.
+- **Acceptance criteria**: All security invariants have explicit tests.
+  Credential values never appear in any captured IPC-style response.
+  Clone safety flags are verified. Update flow re-sanitizes. Type-check
+  passes.
+- **Files**: `src/plugins/installer/install-security.security.test.ts`
+
+### INST-12: Integration tests — full install/verify/update/remove lifecycle
+
+- **Priority**: P1 | **Complexity**: M | **Role**: QA
+- **Depends on**: INST-09, INST-08
+- **Description**: Create integration test suite using local bare git repos
+  as fixtures (via `git init --bare` in temp dirs). Test fixtures needed:
+  valid-plugin-repo (with `install.credentials`), valid-no-creds-repo,
+  invalid-manifest-repo, missing-handler-repo, conflicting-tool-repo.
+  Create a `withLocalGitRepo()` helper that builds a fixture repo
+  programmatically. Tests: (1) install → verify (missing creds) → create
+  cred files → verify (ready). (2) install → update → verify. (3) install
+  → remove → verify (not found). (4) install with name conflict → error.
+  (5) install invalid manifest → cleanup, no partial state. Use injectable
+  GitOps with test-only local path support (since production rejects
+  `file://`).
+- **Acceptance criteria**: Full lifecycle tested without network. Fixture
+  repos built programmatically. Cleanup verified (no orphan dirs). Tests
+  pass in CI. Type-check passes.
+- **Files**: `src/plugins/installer/install-flow.integration.test.ts`,
+  `src/testing/fixtures/create-plugin-repo.ts`
+
+### INST-13: Wire installer plugin into PluginLoader as built-in
+
+- **Priority**: P1 | **Complexity**: S | **Role**: Engineer
+- **Depends on**: INST-09, INST-10
+- **Description**: Ensure the installer plugin is loaded as a built-in plugin
+  from `lib/plugins/installer/` (or `src/plugins/installer/` in dev). Verify
+  it appears in `plugin_list` as `source: "built-in"`. Add `"installer"` to
+  reserved plugin names so it cannot be overridden by user-installed plugins.
+  Wire the `getLoadedHandler` callback so `plugin_verify` can access loaded
+  handlers for Phase 2 smoke tests. The `getLoadedHandler` callback must
+  reference `PluginLoader.getHandler()` lazily (closure over the loader
+  instance, not a snapshot) so it picks up dynamically loaded plugins.
+- **Acceptance criteria**: Installer loads on startup. Its tools appear in
+  the tool catalog. `plugin_list` shows it as built-in. Name "installer" is
+  reserved. `getLoadedHandler` callback uses lazy closure (not snapshot).
+  Type-check passes.
+- **Files**: `src/core/plugin-loader.ts`, `src/main.ts`
+
+### INST-14: Dynamic skills aggregation for container mounting
+
+- **Priority**: P1 | **Complexity**: M | **Role**: DevOps
+- **Depends on**: INST-03
+- **Description**: Extend the existing `SkillLoader` (`src/core/skill-loader.ts`)
+  to support dual-directory discovery: both `lib/plugins/` (built-in) and
+  `$CARAPACE_HOME/plugins/` (user/installed). Before container spawn, aggregate
+  all skill files into a flat directory at `$CARAPACE_HOME/run/skills/`. Add
+  this as a read-only bind mount in `buildVolumes()` for all container runtimes.
+  This way newly installed plugins' skill files are available in the next
+  container session without rebuilding the container image. Skill file names
+  should be namespaced to avoid collisions (e.g., `{pluginName}-{skillFile}`).
+  Wire the updated SkillLoader into Server and `createStartServer()` in
+  `main.ts`.
+- **Acceptance criteria**: Skill files from installed plugins are accessible
+  inside the container. No container image rebuild required for new plugins.
+  Works with Docker, Podman, and Apple Container runtimes. Existing skill
+  loading still works. Type-check passes.
+- **Files**: `src/core/skill-loader.ts`, `src/types/config.ts`,
+  `src/core/server.ts`, `src/main.ts`, container runtime adapters
+
+### INST-15: E2E test — full plugin install lifecycle
+
+- **Priority**: P2 | **Complexity**: L | **Role**: QA
+- **Depends on**: INST-13, INST-14
+- **Description**: End-to-end test of the complete flow: start server →
+  invoke `plugin_install` via IPC → verify clone + manifest validation →
+  invoke `plugin_verify` (missing creds) → create credential files → invoke
+  `plugin_verify` (ready) → restart server → verify new plugin tools appear
+  in catalog → invoke installed plugin's tool → get result → invoke
+  `plugin_remove` → verify cleanup. Use the test-input plugin pattern for
+  programmatic prompt injection. May need container runtime (mark as e2e).
+  Include `assertNoCredentialLeak()` check on every captured IPC response
+  throughout the entire lifecycle.
+- **Acceptance criteria**: Full lifecycle works end-to-end. Plugin tools
+  are functional after restart. Removal cleans up. No credential leakage
+  in any IPC message captured during the test — verified via
+  `assertNoCredentialLeak()` on all responses.
+- **Files**: `src/plugins/installer/install.e2e.test.ts`
+
+---
+
+## Phase INST — Dependency Graph
+
+```
+INST-01 (manifest types) ──────────┐
+INST-02 (readCredential) ─ standalone
+INST-03 (subdirs) ──── standalone  │
+INST-04 (verify interface) ─ standalone
+INST-05 (GitOps) ──────────────────┤
+                                   │
+INST-06 (git-sanitizer) ◄── INST-05│
+INST-14 (skills mount) ◄── INST-03 │
+                                   │
+INST-07 (install tool) ◄── INST-01 + INST-03 + INST-05 + INST-06
+                                   │
+INST-08 (verify tool) ◄── INST-07 + INST-04
+INST-09 (list/remove/update) ◄── INST-07
+INST-10 (manifest + skill) ◄── INST-07
+                                   │
+INST-11 (security tests) ◄── INST-08 + INST-06
+INST-12 (integration tests) ◄── INST-09 + INST-08
+INST-13 (wire into loader) ◄── INST-09 + INST-10
+                                   │
+INST-15 (e2e test) ◄── INST-13 + INST-14
+```
+
+### Parallel Work Streams
+
+**Wave 1** (no dependencies — can start immediately in parallel):
+
+- INST-01 (Engineer): Manifest types
+- INST-02 (Engineer): CoreServices.readCredential
+- INST-03 (Engineer): CARAPACE_SUBDIRS
+- INST-04 (Engineer): verify() interface
+- INST-05 (Engineer): GitOps interface + RealGitOps
+
+**Wave 2** (depends on Wave 1):
+
+- INST-06 (Security): git-sanitizer — depends on INST-05
+- INST-14 (DevOps): Skills aggregation + mount — depends on INST-03
+
+**Wave 3** (depends on Wave 2):
+
+- INST-07 (Engineer): plugin_install tool — depends on INST-01 + INST-03 + INST-05 + INST-06
+
+**Wave 4** (depends on Wave 3):
+
+- INST-08 (Engineer): plugin_verify tool — depends on INST-07 + INST-04
+- INST-09 (Engineer): list/remove/update tools — depends on INST-07
+- INST-10 (DX Advocate): manifest.json + skill file — depends on INST-07
+
+**Wave 5** (depends on Wave 4):
+
+- INST-11 (QA): Security tests — depends on INST-08 + INST-06
+- INST-12 (QA): Integration tests — depends on INST-09 + INST-08
+- INST-13 (Engineer): Wire into loader — depends on INST-09 + INST-10
+
+**Wave 6** (depends on Wave 5):
+
+- INST-15 (QA): E2E test — depends on INST-13 + INST-14
+
+---
+
 ## Task Summary
 
 | Category  |   Count |     P0 |     P1 |     P2 |
@@ -2639,4 +3031,5 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
 | WIRE      |       4 |      0 |      4 |      0 |
 | CRED      |       4 |      0 |      4 |      0 |
 | STREAM    |      12 |      1 |     11 |      0 |
-| **Total** | **136** | **15** | **81** | **40** |
+| INST      |      15 |      0 |     14 |      1 |
+| **Total** | **151** | **15** | **95** | **41** |
