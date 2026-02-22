@@ -62,6 +62,8 @@ export interface ServerConfig {
   claudeStateDir?: string;
   /** Path to the SQLite database for ClaudeSessionStore. */
   sessionDbPath?: string;
+  /** Container network name (e.g. 'bridge'). When set, containers have network access. */
+  networkName?: string;
 }
 
 /** Minimal filesystem interface for prompt file watching. */
@@ -233,6 +235,7 @@ export class Server {
         eventBus: this.eventBus ?? undefined,
         claudeSessionStore: this.claudeSessionStore ?? undefined,
         responseSanitizer: this.responseSanitizer ?? undefined,
+        networkName: this.config.networkName,
       });
 
       const lifecycleManager = this.lifecycleManager;
@@ -240,6 +243,7 @@ export class Server {
       const sessionManager = this.sessionManager;
       const credFs = this.credentialFs;
       const claudeSessionStore = this.claudeSessionStore;
+      const pFs = this.promptFs;
 
       this.eventDispatcher = new EventDispatcher({
         logger: this.logger.child('event-dispatcher'),
@@ -255,6 +259,16 @@ export class Server {
             }
           }
 
+          // Ensure per-group claude-state directory exists before container mount
+          const claudeStatePath = config.claudeStateDir
+            ? join(config.claudeStateDir, group)
+            : undefined;
+          if (claudeStatePath && pFs) {
+            if (!pFs.existsSync(claudeStatePath)) {
+              pFs.mkdirSync(claudeStatePath, { recursive: true });
+            }
+          }
+
           const managed = await lifecycleManager.spawn({
             group,
             image: config.containerImage ?? 'carapace-agent:latest',
@@ -262,7 +276,7 @@ export class Server {
             workspacePath: config.workspacePath,
             env,
             stdinData,
-            claudeStatePath: config.claudeStateDir ? join(config.claudeStateDir, group) : undefined,
+            claudeStatePath,
           });
           return managed.session.sessionId;
         },

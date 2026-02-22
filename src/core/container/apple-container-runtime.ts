@@ -39,13 +39,22 @@ export type ExecFn = (
 ) => Promise<{ stdout: string; stderr: string }>;
 
 /**
+ * Result from spawning a container process with stdin piping.
+ * Provides stdout/stderr streams for output reading.
+ */
+export interface SpawnResult {
+  stdout?: NodeJS.ReadableStream;
+  stderr?: NodeJS.ReadableStream;
+}
+
+/**
  * Spawn function type for running a process with stdin data piped.
  *
  * Used by `container start -ai` to pipe credentials to the container's stdin.
  * The spawn function should write stdinData to the child process's stdin
  * and detach without waiting for the process to exit.
  */
-export type SpawnFn = (file: string, args: readonly string[], stdinData: string) => void;
+export type SpawnFn = (file: string, args: readonly string[], stdinData: string) => SpawnResult;
 
 // ---------------------------------------------------------------------------
 // Options
@@ -198,9 +207,9 @@ export class AppleContainerRuntime implements ContainerRuntime {
       const id = stdout.trim();
 
       // Start container with stdin attached; pipe credentials
-      this.spawnFn(this.containerPath, ['start', '-ai', id], options.stdinData);
+      const streams = this.spawnFn(this.containerPath, ['start', '-ai', id], options.stdinData);
 
-      return { id, name, runtime: this.name };
+      return { id, name, runtime: this.name, stdout: streams.stdout, stderr: streams.stderr };
     }
 
     const args = this.buildRunArgs(options, name);
@@ -336,10 +345,13 @@ const defaultExec: ExecFn = async (file, args) => {
 
 const defaultSpawn: SpawnFn = (file, args, stdinData) => {
   const child = spawn(file, [...args], {
-    stdio: ['pipe', 'ignore', 'ignore'],
-    detached: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
   });
   child.stdin!.write(stdinData);
   child.stdin!.end();
-  child.unref();
+
+  return {
+    stdout: child.stdout ?? undefined,
+    stderr: child.stderr ?? undefined,
+  };
 };
