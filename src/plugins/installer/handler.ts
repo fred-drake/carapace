@@ -2,7 +2,7 @@
  * InstallerHandler — plugin management tools for Carapace.
  *
  * A special built-in handler that manages third-party plugins:
- * install, list, remove, update, and configure. Dependencies are
+ * install, list, remove, update, configure, and verify. Dependencies are
  * injected directly via constructor (not discovered from disk like
  * regular plugins).
  *
@@ -12,9 +12,19 @@
  *   plugin_remove    — delete a plugin directory (optionally creds)
  *   plugin_update    — fetch + checkout latest, re-sanitize, re-validate
  *   plugin_configure — write non-secret config values to config.json
+ *   plugin_verify    — check credential files + optional smoke test
  */
 
-import { readFileSync, existsSync, rmSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
+import {
+  readFileSync,
+  existsSync,
+  rmSync,
+  readdirSync,
+  writeFileSync,
+  mkdirSync,
+  lstatSync,
+  type Stats,
+} from 'node:fs';
 import { join } from 'node:path';
 
 import _Ajv, { type ErrorObject } from 'ajv';
@@ -27,6 +37,7 @@ import type {
   PluginContext,
   ToolInvocationResult,
 } from '../../core/plugin-handler.js';
+import { ResponseSanitizer } from '../../core/response-sanitizer.js';
 import { ErrorCode } from '../../types/errors.js';
 import type { PluginManifest } from '../../types/manifest.js';
 import { MANIFEST_JSON_SCHEMA } from '../../types/manifest-schema.js';
@@ -48,6 +59,8 @@ export interface InstallerDeps {
   carapaceHome: string;
   gitOps: GitOps;
   reservedNames: ReadonlySet<string>;
+  /** Optional lookup for loaded plugin handlers — used by plugin_verify smoke test. */
+  getLoadedHandler?: (name: string) => PluginHandler | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +77,7 @@ export interface InstallerFs {
   readdirSync(path: string): string[];
   writeFileSync(path: string, data: string, encoding: BufferEncoding): void;
   mkdirSync(path: string, options: { recursive: boolean }): void;
+  lstatSync(path: string): Stats;
 }
 
 /**
@@ -82,6 +96,12 @@ export type SanitizeFunction = (
 /** Valid plugin name pattern: lowercase, starts with letter. */
 const NAME_PATTERN = /^[a-z][a-z0-9_-]*$/;
 
+/** Timeout for plugin verify() smoke test in milliseconds. */
+const VERIFY_TIMEOUT_MS = 10_000;
+
+/** Allowed file permissions for credential files (owner-only). */
+const ALLOWED_PERMISSIONS = new Set([0o600, 0o400]);
+
 // ---------------------------------------------------------------------------
 // InstallerHandler
 // ---------------------------------------------------------------------------
@@ -93,9 +113,11 @@ export class InstallerHandler implements PluginHandler {
   private readonly carapaceHome: string;
   private readonly gitOps: GitOps;
   private readonly reservedNames: ReadonlySet<string>;
+  private readonly getLoadedHandler?: (name: string) => PluginHandler | undefined;
   private readonly fs: InstallerFs;
   private readonly sanitize: SanitizeFunction;
   private readonly sanitizerFs: SanitizerFs;
+  private readonly sanitizer: ResponseSanitizer;
 
   constructor(
     deps: InstallerDeps,
@@ -108,6 +130,7 @@ export class InstallerHandler implements PluginHandler {
     this.carapaceHome = deps.carapaceHome;
     this.gitOps = deps.gitOps;
     this.reservedNames = deps.reservedNames;
+    this.getLoadedHandler = deps.getLoadedHandler;
     this.fs = fsOverride ?? {
       existsSync,
       readFileSync,
@@ -115,9 +138,11 @@ export class InstallerHandler implements PluginHandler {
       readdirSync,
       writeFileSync,
       mkdirSync,
+      lstatSync,
     };
     this.sanitize = sanitizeOverride ?? sanitizeClonedRepo;
     this.sanitizerFs = sanitizerFsOverride ?? new RealSanitizerFs();
+    this.sanitizer = new ResponseSanitizer();
   }
 
   async initialize(services: CoreServices): Promise<void> {
@@ -140,6 +165,8 @@ export class InstallerHandler implements PluginHandler {
         return this.handlePluginUpdate(args);
       case 'plugin_configure':
         return this.handlePluginConfigure(args);
+      case 'plugin_verify':
+        return this.handlePluginVerify(args);
       default:
         return {
           ok: false,
@@ -766,6 +793,166 @@ export class InstallerHandler implements PluginHandler {
         key,
         value,
       },
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // plugin_verify
+  // -------------------------------------------------------------------------
+
+  private async handlePluginVerify(args: Record<string, unknown>): Promise<ToolInvocationResult> {
+    const name = args['name'] as string;
+    if (!name || typeof name !== 'string') {
+      return {
+        ok: false,
+        error: {
+          code: ErrorCode.VALIDATION_FAILED,
+          message: 'Missing required argument: name',
+          retriable: false,
+          field: 'name',
+        },
+      };
+    }
+
+    // Verify plugin exists
+    const pluginDir = join(this.pluginsDir, name);
+    if (!this.fs.existsSync(pluginDir)) {
+      return {
+        ok: false,
+        error: {
+          code: ErrorCode.VALIDATION_FAILED,
+          message: `Plugin "${name}" not found at ${pluginDir}`,
+          retriable: false,
+          field: 'name',
+        },
+      };
+    }
+
+    // Read manifest
+    let manifest: PluginManifest;
+    try {
+      manifest = this.readAndValidateManifest(pluginDir);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        error: {
+          code: ErrorCode.HANDLER_ERROR,
+          message: `Could not read manifest: ${message}`,
+          retriable: false,
+        },
+      };
+    }
+
+    // Phase 1: Credential checks
+    const credentialSpecs = manifest.install?.credentials ?? [];
+    const credentialStatus: Array<Record<string, unknown>> = [];
+    let allCredentialsOk = true;
+
+    for (const cred of credentialSpecs) {
+      const credPath = join(this.credentialsDir, name, cred.key);
+      const status: Record<string, unknown> = {
+        key: cred.key,
+        required: cred.required,
+        path: credPath,
+      };
+
+      // Check if file exists
+      let stats: Stats;
+      try {
+        stats = this.fs.lstatSync(credPath);
+      } catch {
+        status['ok'] = false;
+        status['error'] = 'File not found';
+        if (cred.required) allCredentialsOk = false;
+        credentialStatus.push(status);
+        continue;
+      }
+
+      // Check for symlink
+      if (stats.isSymbolicLink()) {
+        status['ok'] = false;
+        status['error'] = 'File is a symlink (not allowed)';
+        if (cred.required) allCredentialsOk = false;
+        credentialStatus.push(status);
+        continue;
+      }
+
+      // Check permissions (mode & 0o777 to get permission bits)
+      const perms = stats.mode & 0o777;
+      if (!ALLOWED_PERMISSIONS.has(perms)) {
+        status['ok'] = false;
+        status['error'] = `Incorrect permissions: 0${perms.toString(8)} (expected 0600 or 0400)`;
+        if (cred.required) allCredentialsOk = false;
+        credentialStatus.push(status);
+        continue;
+      }
+
+      // Check non-empty
+      if (stats.size === 0) {
+        status['ok'] = false;
+        status['error'] = 'File is empty';
+        if (cred.required) allCredentialsOk = false;
+        credentialStatus.push(status);
+        continue;
+      }
+
+      status['ok'] = true;
+      credentialStatus.push(status);
+    }
+
+    // Phase 2: Smoke test (if handler loaded and implements verify())
+    let smokeTest: Record<string, unknown> | undefined;
+
+    if (this.getLoadedHandler) {
+      const loadedHandler = this.getLoadedHandler(name);
+      if (loadedHandler?.verify) {
+        try {
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            setTimeout(
+              () => reject(new Error('Verify timed out after 10 seconds')),
+              VERIFY_TIMEOUT_MS,
+            );
+          });
+          const verifyResult = await Promise.race([loadedHandler.verify(), timeoutPromise]);
+
+          // Sanitize detail to strip any credential values
+          const sanitizedDetail = verifyResult.detail
+            ? (this.sanitizer.sanitize(verifyResult.detail).value as Record<string, unknown>)
+            : undefined;
+
+          smokeTest = {
+            ok: verifyResult.ok,
+            message: verifyResult.message,
+            ...(sanitizedDetail !== undefined && { detail: sanitizedDetail }),
+          };
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          smokeTest = {
+            ok: false,
+            message: `Smoke test failed: ${message}`,
+          };
+        }
+      }
+    }
+
+    // Compute overall readiness
+    const smokeTestPassed = smokeTest === undefined || smokeTest['ok'] === true;
+    const ready = allCredentialsOk && smokeTestPassed;
+
+    const result: Record<string, unknown> = {
+      ready,
+      plugin_name: name,
+      credential_status: credentialStatus,
+    };
+
+    if (smokeTest !== undefined) {
+      result['smoke_test'] = smokeTest;
+    }
+
+    return {
+      ok: true as const,
+      result,
     };
   }
 
