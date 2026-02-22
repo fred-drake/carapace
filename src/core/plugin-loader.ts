@@ -71,6 +71,7 @@ export class PluginLoader {
   private readonly eventBus: EventBus | undefined;
   private readonly logger: Logger;
   private readonly loadedHandlers: Map<string, PluginHandler> = new Map();
+  private readonly reservedPluginNames: Set<string> = new Set();
 
   constructor(opts: {
     toolCatalog: ToolCatalog;
@@ -137,12 +138,17 @@ export class PluginLoader {
     const userPlugins = await this.discoverPluginsInDir(this.userPluginsDir, 'user');
 
     // Merge: user overrides built-in of same name
+    // Skip any names that are reserved (registered via registerBuiltinHandler)
     const merged = new Map<string, DiscoveredPlugin>();
     for (const plugin of builtinPlugins) {
-      merged.set(plugin.name, plugin);
+      if (!this.reservedPluginNames.has(plugin.name)) {
+        merged.set(plugin.name, plugin);
+      }
     }
     for (const plugin of userPlugins) {
-      merged.set(plugin.name, plugin);
+      if (!this.reservedPluginNames.has(plugin.name)) {
+        merged.set(plugin.name, plugin);
+      }
     }
 
     return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -158,6 +164,117 @@ export class PluginLoader {
    */
   getHandler(pluginName: string): PluginHandler | undefined {
     return this.loadedHandlers.get(pluginName);
+  }
+
+  // -------------------------------------------------------------------------
+  // Built-in handler registration
+  // -------------------------------------------------------------------------
+
+  /**
+   * Register a pre-constructed handler as a built-in plugin.
+   *
+   * Unlike filesystem-discovered plugins, built-in handlers are constructed
+   * by the application factory with their dependencies already injected.
+   * This method:
+   *   1. Validates tool name uniqueness (catalog + reserved intrinsics)
+   *   2. Calls handler.initialize() with CoreServices (with timeout)
+   *   3. Registers tools in the catalog
+   *   4. Marks the plugin name as reserved (cannot be overridden by user plugins)
+   *
+   * @param name - The plugin name (e.g. "installer")
+   * @param handler - The pre-constructed PluginHandler instance
+   * @param manifest - The plugin's manifest (parsed, not from disk)
+   */
+  async registerBuiltinHandler(
+    name: string,
+    handler: PluginHandler,
+    manifest: PluginManifest,
+  ): Promise<PluginLoadResult> {
+    this.logger.info('registering built-in handler', { pluginName: name });
+
+    // 1. Check tool name uniqueness + reserved names
+    for (const tool of manifest.provides.tools) {
+      if (RESERVED_INTRINSIC_NAMES.has(tool.name)) {
+        this.logger.warn('built-in handler registration failed', {
+          pluginName: name,
+          category: 'invalid_manifest',
+          reason: 'reserved tool name',
+        });
+        return {
+          ok: false,
+          pluginName: name,
+          error: `Tool name "${tool.name}" is reserved for core intrinsics`,
+          category: 'invalid_manifest',
+        };
+      }
+      if (this.toolCatalog.has(tool.name)) {
+        this.logger.warn('built-in handler registration failed', {
+          pluginName: name,
+          category: 'invalid_manifest',
+          reason: 'tool name collision',
+        });
+        return {
+          ok: false,
+          pluginName: name,
+          error: `Tool name "${tool.name}" is already registered by another plugin`,
+          category: 'invalid_manifest',
+        };
+      }
+    }
+
+    // 2. Initialize with timeout
+    try {
+      await this.initializeWithTimeout(handler, name, manifest);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isTimeout = message.includes('timed out');
+      const category = isTimeout ? 'timeout' : 'init_error';
+      this.logger.warn('built-in handler registration failed', { pluginName: name, category });
+      return {
+        ok: false,
+        pluginName: name,
+        error: `Handler initialization failed: ${message}`,
+        category,
+      };
+    }
+
+    // 3. Register tools in catalog
+    const toolNames: string[] = [];
+    for (const tool of manifest.provides.tools) {
+      this.toolCatalog.register(tool, async (envelope) => {
+        const toolName = envelope.topic.replace('tool.invoke.', '');
+        const result = await handler.handleToolInvocation(toolName, envelope.payload.arguments, {
+          group: envelope.group,
+          sessionId: envelope.source,
+          correlationId: envelope.correlation,
+          timestamp: envelope.timestamp,
+        });
+        if (result.ok) {
+          return result.result;
+        }
+        return { error: result.error };
+      });
+      toolNames.push(tool.name);
+    }
+
+    // 4. Mark as loaded and reserved
+    this.loadedHandlers.set(name, handler);
+    this.reservedPluginNames.add(name);
+
+    this.logger.info('built-in handler registered', {
+      pluginName: name,
+      source: 'built-in',
+      tools: toolNames,
+    });
+    return { ok: true, pluginName: name, manifest, handler, source: 'built-in' };
+  }
+
+  /**
+   * Check whether a plugin name is reserved (registered as a built-in handler).
+   * Reserved names cannot be overridden by user plugins discovered from disk.
+   */
+  isReservedPlugin(name: string): boolean {
+    return this.reservedPluginNames.has(name);
   }
 
   // -------------------------------------------------------------------------

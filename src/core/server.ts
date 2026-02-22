@@ -80,6 +80,16 @@ export interface PromptFs {
   mkdirSync(path: string, options?: { recursive?: boolean }): void;
 }
 
+/**
+ * A pre-constructed built-in handler to register before filesystem discovery.
+ * Used for handlers like the installer that need constructor-injected deps.
+ */
+export interface BuiltinHandlerEntry {
+  name: string;
+  handler: PluginHandler;
+  manifest: import('../types/index.js').PluginManifest;
+}
+
 /** Injectable dependencies for the Server. */
 export interface ServerDeps {
   /** Socket factory — ZmqSocketFactory in production, FakeSocketFactory in tests. */
@@ -96,6 +106,8 @@ export interface ServerDeps {
   credentialFs?: CredentialFs;
   /** Logger instance for structured logging. */
   logger?: Logger;
+  /** Pre-constructed built-in handlers to register before filesystem plugin discovery. */
+  builtinHandlers?: BuiltinHandlerEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +125,7 @@ export class Server {
   private readonly promptFs: PromptFs | undefined;
   private readonly credentialFs: CredentialFs | undefined;
   private readonly logger: Logger;
+  private readonly builtinHandlers: BuiltinHandlerEntry[];
 
   // Subsystems — created during start()
   private provisioner: SocketProvisioner | null = null;
@@ -141,6 +154,7 @@ export class Server {
     this.promptFs = deps.promptFs;
     this.credentialFs = deps.credentialFs;
     this.logger = deps.logger ?? createLogger('server');
+    this.builtinHandlers = deps.builtinHandlers ?? [];
 
     // If a custom FS is provided, store it for provisioner creation
     this.provisionerFs = deps.fs;
@@ -218,7 +232,12 @@ export class Server {
 
     this.router = new MessageRouter(this.toolCatalog);
 
-    // 5. Load plugins (graceful — failures don't prevent startup)
+    // 5a. Register pre-constructed built-in handlers (before filesystem discovery)
+    for (const entry of this.builtinHandlers) {
+      await this.pluginLoader.registerBuiltinHandler(entry.name, entry.handler, entry.manifest);
+    }
+
+    // 5b. Load plugins from filesystem (graceful — failures don't prevent startup)
     await this.pluginLoader.loadAll();
 
     // 6. Wire request handler

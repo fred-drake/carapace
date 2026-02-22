@@ -39,12 +39,15 @@ import { PodmanRuntime } from './core/container/podman-runtime.js';
 import { AppleContainerRuntime } from './core/container/apple-container-runtime.js';
 import type { ContainerRuntime } from './core/container/runtime.js';
 import { Server } from './core/server.js';
-import type { ServerConfig, ServerDeps } from './core/server.js';
+import type { ServerConfig, ServerDeps, BuiltinHandlerEntry } from './core/server.js';
 import { ZmqSocketFactory } from './core/zmq-socket-factory.js';
 import { resolveGitSha } from './core/image-identity.js';
 import { buildImage as buildImageFn } from './core/image-builder.js';
 import { configureLogging, createSanitizingLogSink } from './core/logger.js';
 import { ResponseSanitizer } from './core/response-sanitizer.js';
+import type { PluginHandler } from './core/plugin-handler.js';
+import { InstallerHandler } from './plugins/installer/handler.js';
+import { RealGitOps } from './plugins/installer/git-ops.js';
 
 // ---------------------------------------------------------------------------
 // PID file helpers
@@ -185,6 +188,7 @@ function createStartServer(
   const credentialsDir = join(home, 'credentials');
   const skillsDir = join(home, 'run', 'skills');
   const builtinPluginsDir = join(home, 'lib', 'plugins');
+  const credentialsPluginsDir = join(home, 'credentials', 'plugins');
 
   const config: ServerConfig = {
     socketDir,
@@ -192,13 +196,49 @@ function createStartServer(
     builtinPluginsDir,
     promptsDir,
     credentialsDir,
-    credentialsPluginsDir: join(home, 'credentials', 'plugins'),
+    credentialsPluginsDir,
     containerImage: readCurrentImageTag(home),
     claudeStateDir: join(home, 'data', 'claude-state'),
     sessionDbPath: join(home, 'data', 'claude-sessions.sqlite'),
     networkName: 'default',
     skillsDir,
   };
+
+  // Reserved plugin names — built-in plugins that cannot be overridden
+  const reservedNames: ReadonlySet<string> = new Set([
+    'installer',
+    'memory',
+    'test-input',
+    'hello',
+  ]);
+
+  // Read installer manifest from the source tree
+  const installerManifestPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    'plugins',
+    'installer',
+    'manifest.json',
+  );
+  const installerManifest = JSON.parse(
+    readFileSync(installerManifestPath, 'utf-8'),
+  ) as import('./types/index.js').PluginManifest;
+
+  // Mutable server reference — captured by the lazy closure below.
+  // Set after construction so there's no circular reference in the initializer.
+  let serverRef: Server | null = null;
+
+  // Construct InstallerHandler with lazy getLoadedHandler closure.
+  // The closure reads serverRef at call time (not at construction time),
+  // so dynamically loaded plugins are always visible.
+  const installerHandler = new InstallerHandler({
+    pluginsDir,
+    credentialsDir: credentialsPluginsDir,
+    carapaceHome: home,
+    gitOps: new RealGitOps(),
+    reservedNames,
+    getLoadedHandler: (name: string): PluginHandler | undefined =>
+      serverRef?.getPluginHandler(name),
+  });
 
   const deps: ServerDeps = {
     socketFactory: new ZmqSocketFactory(),
@@ -215,9 +255,14 @@ function createStartServer(
       existsSync: (path: string) => existsSync(path),
       readFileSync: (path: string) => readFileSync(path, 'utf-8'),
     },
+    builtinHandlers: [
+      { name: 'installer', handler: installerHandler, manifest: installerManifest },
+    ],
   };
 
   const server = new Server(config, deps);
+  serverRef = server;
+
   return server;
 }
 
