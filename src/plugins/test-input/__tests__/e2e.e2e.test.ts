@@ -71,6 +71,7 @@ function createChannelServices(factory: FakeSocketFactory): ChannelServices {
     getAuditLog: async () => [],
     getToolCatalog: () => [],
     getSessionInfo: () => ({ group: 'test', sessionId: 'e2e-session', startedAt: '' }),
+    readCredential: () => '',
     publishEvent: async (partial) => {
       const { randomUUID } = await import('node:crypto');
       const envelope: EventEnvelope = {

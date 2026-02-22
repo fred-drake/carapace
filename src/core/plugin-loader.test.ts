@@ -255,6 +255,7 @@ describe('PluginLoader', () => {
           getAuditLog: expect.any(Function),
           getToolCatalog: expect.any(Function),
           getSessionInfo: expect.any(Function),
+          readCredential: expect.any(Function),
         }),
       );
     });

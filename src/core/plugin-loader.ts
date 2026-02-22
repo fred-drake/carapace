@@ -13,6 +13,7 @@
 
 import { readdir, readFile, access } from 'node:fs/promises';
 import { join, basename } from 'node:path';
+import { readCredentialFile } from '../security/credential-dir-security.js';
 
 import _Ajv, { type ErrorObject } from 'ajv';
 // ajv ESM interop: default export is the constructor
@@ -28,6 +29,7 @@ import type {
   PluginLoadResult,
   PluginSource,
 } from './plugin-handler.js';
+import { formatErrorMessage } from './plugin-handler.js';
 import type { EventBus } from './event-bus.js';
 import { createLogger, type Logger } from './logger.js';
 
@@ -64,6 +66,7 @@ export class PluginLoader {
   private readonly toolCatalog: ToolCatalog;
   private readonly userPluginsDir: string;
   private readonly builtinPluginsDir: string | undefined;
+  private readonly credentialsPluginsDir: string | undefined;
   private readonly initTimeoutMs: number;
   private readonly eventBus: EventBus | undefined;
   private readonly logger: Logger;
@@ -73,6 +76,7 @@ export class PluginLoader {
     toolCatalog: ToolCatalog;
     userPluginsDir: string;
     builtinPluginsDir?: string;
+    credentialsPluginsDir?: string;
     initTimeoutMs?: number;
     eventBus?: EventBus;
     logger?: Logger;
@@ -80,6 +84,7 @@ export class PluginLoader {
     this.toolCatalog = opts.toolCatalog;
     this.userPluginsDir = opts.userPluginsDir;
     this.builtinPluginsDir = opts.builtinPluginsDir;
+    this.credentialsPluginsDir = opts.credentialsPluginsDir;
     this.initTimeoutMs = opts.initTimeoutMs ?? 10_000;
     this.eventBus = opts.eventBus;
     this.logger = opts.logger ?? createLogger('plugin-loader');
@@ -388,6 +393,53 @@ export class PluginLoader {
   // -------------------------------------------------------------------------
 
   /**
+   * Read a credential file scoped to a specific plugin.
+   *
+   * Reads from `$CARAPACE_HOME/credentials/plugins/{pluginName}/{key}`.
+   * Validates the key to prevent path traversal, then delegates to
+   * `readCredentialFile()` which rejects symlinks.
+   *
+   * @throws If the key contains `/`, `..`, or null bytes.
+   * @throws If the credentials directory is not configured.
+   * @throws If the credential file does not exist.
+   */
+  private readPluginCredential(pluginName: string, key: string): string {
+    // Validate key — reject path traversal characters
+    if (key.includes('/') || key.includes('..') || key.includes('\0')) {
+      throw new Error(
+        formatErrorMessage({
+          component: 'PluginLoader',
+          what: `Invalid credential key "${key}" for plugin "${pluginName}"`,
+          how: 'Credential keys must be simple filenames without /, .., or null bytes',
+        }),
+      );
+    }
+
+    if (!this.credentialsPluginsDir) {
+      throw new Error(
+        formatErrorMessage({
+          component: 'PluginLoader',
+          what: `Cannot read credential "${key}" for plugin "${pluginName}": credentials directory not configured`,
+          how: 'Ensure $CARAPACE_HOME/credentials/plugins exists and the server is started with credentialsDir',
+        }),
+      );
+    }
+
+    const filePath = join(this.credentialsPluginsDir, pluginName, key);
+    try {
+      return readCredentialFile(filePath);
+    } catch {
+      throw new Error(
+        formatErrorMessage({
+          component: 'PluginLoader',
+          what: `Credential "${key}" not found for plugin "${pluginName}"`,
+          how: `Create the file at ${filePath} with the credential value`,
+        }),
+      );
+    }
+  }
+
+  /**
    * Try to dynamically import handler.js or handler.ts from the plugin dir.
    * Looks for handler.js first, then handler.ts.
    */
@@ -444,6 +496,9 @@ export class PluginLoader {
       getAuditLog: async () => [],
       getToolCatalog: () => this.toolCatalog.list(),
       getSessionInfo: () => ({ group: '', sessionId: '', startedAt: '' }),
+      readCredential: (key: string): string => {
+        return this.readPluginCredential(pluginName, key);
+      },
     };
 
     let services: CoreServices | ChannelServices;

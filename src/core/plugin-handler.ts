@@ -80,6 +80,14 @@ export interface CoreServices {
   getAuditLog(filters: AuditLogFilter): Promise<AuditLogEntry[]>;
   getToolCatalog(): ToolDeclaration[];
   getSessionInfo(): SessionInfo;
+  /**
+   * Read a credential file from the plugin's scoped credential directory.
+   *
+   * Reads `$CARAPACE_HOME/credentials/plugins/{pluginName}/{key}`.
+   * The key must be a simple filename (no `/`, `..`, or null bytes).
+   * Throws if the key is invalid or the file does not exist.
+   */
+  readCredential(key: string): string;
 }
 
 // ---------------------------------------------------------------------------

@@ -58,6 +58,8 @@ export interface ServerConfig {
   promptsDir?: string;
   /** Directory containing credential files (anthropic-api-key, claude-oauth-token). */
   credentialsDir?: string;
+  /** Directory containing per-plugin credential files (`$CARAPACE_HOME/credentials/plugins/`). */
+  credentialsPluginsDir?: string;
   /** Base directory for per-group Claude Code state (e.g. `$CARAPACE_HOME/data/claude-state/`). */
   claudeStateDir?: string;
   /** Path to the SQLite database for ClaudeSessionStore. */
@@ -206,6 +208,7 @@ export class Server {
       toolCatalog: this.toolCatalog,
       userPluginsDir: this.config.pluginsDir,
       builtinPluginsDir: this.config.builtinPluginsDir,
+      credentialsPluginsDir: this.config.credentialsPluginsDir,
       logger: this.logger.child('plugin-loader'),
     });
 

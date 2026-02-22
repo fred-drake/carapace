@@ -110,10 +110,16 @@ function mapEntry(entry: AuditEntry, index: number): AuditLogEntry {
 export class CoreServicesImpl implements CoreServices {
   private readonly auditLog: AuditLog;
   private readonly toolCatalog: ToolCatalog;
+  private readonly credentialReader: ((key: string) => string) | undefined;
 
-  constructor(auditLog: AuditLog, toolCatalog: ToolCatalog) {
+  constructor(
+    auditLog: AuditLog,
+    toolCatalog: ToolCatalog,
+    credentialReader?: (key: string) => string,
+  ) {
     this.auditLog = auditLog;
     this.toolCatalog = toolCatalog;
+    this.credentialReader = credentialReader;
   }
 
   async getAuditLog(filters: AuditLogFilter): Promise<AuditLogEntry[]> {
@@ -161,6 +167,13 @@ export class CoreServicesImpl implements CoreServices {
       sessionId: ctx.sessionId,
       startedAt: ctx.startedAt,
     };
+  }
+
+  readCredential(key: string): string {
+    if (!this.credentialReader) {
+      throw new Error('readCredential is not available: no credential reader configured');
+    }
+    return this.credentialReader(key);
   }
 
   private requireContext(): RequestContext {

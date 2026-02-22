@@ -431,6 +431,7 @@ export class IntegrationHarness {
       getAuditLog: async () => [],
       getToolCatalog: () => [],
       getSessionInfo: () => ({ group: 'test', sessionId: '', startedAt: '' }),
+      readCredential: () => '',
       publishEvent: async (partial) => {
         await this.eventBus.publish({
           id: crypto.randomUUID(),

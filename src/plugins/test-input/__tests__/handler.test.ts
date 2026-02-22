@@ -15,6 +15,7 @@ function createMockChannelServices(): ChannelServices & {
     getAuditLog: vi.fn(async () => []),
     getToolCatalog: vi.fn(() => []),
     getSessionInfo: vi.fn(() => ({ group: 'test', sessionId: 'sess-1', startedAt: '' })),
+    readCredential: vi.fn(() => ''),
     publishEvent: vi.fn(async () => {}),
   };
 }
