@@ -60,6 +60,7 @@ function makeCoreServices(): CoreServices {
       sessionId: 'sess-conformance',
       startedAt: new Date().toISOString(),
     }),
+    readCredential: () => '',
   };
 }
 

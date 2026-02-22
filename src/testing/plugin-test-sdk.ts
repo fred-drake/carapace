@@ -85,6 +85,7 @@ function createStubCoreServices(): CoreServices {
       sessionId: 'test-session',
       startedAt: new Date().toISOString(),
     }),
+    readCredential: () => '',
   };
 }
 

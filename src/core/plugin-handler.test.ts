@@ -145,7 +145,7 @@ describe('ToolInvocationResult', () => {
 // ---------------------------------------------------------------------------
 
 describe('CoreServices', () => {
-  it('exposes getAuditLog, getToolCatalog, and getSessionInfo', () => {
+  it('exposes getAuditLog, getToolCatalog, getSessionInfo, and readCredential', () => {
     const services: CoreServices = {
       getAuditLog: vi.fn(async () => []),
       getToolCatalog: vi.fn(() => []),
@@ -154,11 +154,13 @@ describe('CoreServices', () => {
         sessionId: 'sess-001',
         startedAt: '2026-02-19T00:00:00.000Z',
       })),
+      readCredential: vi.fn(() => 'secret-value'),
     };
 
     expect(services.getAuditLog).toBeDefined();
     expect(services.getToolCatalog).toBeDefined();
     expect(services.getSessionInfo).toBeDefined();
+    expect(services.readCredential).toBeDefined();
   });
 });
 
@@ -191,6 +193,7 @@ describe('Lifecycle: init → handleToolInvocation → shutdown', () => {
         sessionId: 's',
         startedAt: '2026-02-19T00:00:00.000Z',
       }),
+      readCredential: () => '',
     };
 
     await handler.initialize(services);
@@ -304,6 +307,7 @@ describe('Type-level tests (autocomplete verification)', () => {
     expectTypeOf<CoreServices['getAuditLog']>().toBeFunction();
     expectTypeOf<CoreServices['getToolCatalog']>().toBeFunction();
     expectTypeOf<CoreServices['getSessionInfo']>().toBeFunction();
+    expectTypeOf<CoreServices['readCredential']>().toBeFunction();
   });
 
   it('PluginContext has all required fields', () => {

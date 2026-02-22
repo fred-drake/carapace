@@ -192,6 +192,7 @@ function createStartServer(
     builtinPluginsDir,
     promptsDir,
     credentialsDir,
+    credentialsPluginsDir: join(home, 'credentials', 'plugins'),
     containerImage: readCurrentImageTag(home),
     claudeStateDir: join(home, 'data', 'claude-state'),
     sessionDbPath: join(home, 'data', 'claude-sessions.sqlite'),
