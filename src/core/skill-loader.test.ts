@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdir, writeFile, rm, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -26,6 +26,10 @@ async function createPluginDir(
     await writeFile(join(skillsDir, filename), content, 'utf-8');
   }
   return pluginDir;
+}
+
+function uniqueTmpDir(): string {
+  return join(tmpdir(), `carapace-skill-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -56,10 +60,7 @@ describe('SkillLoader.discoverSkills', () => {
   let loader: SkillLoader;
 
   beforeEach(async () => {
-    testRoot = join(
-      tmpdir(),
-      `carapace-skill-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
+    testRoot = uniqueTmpDir();
     await mkdir(testRoot, { recursive: true });
     loader = new SkillLoader({ pluginsDir: testRoot });
   });
@@ -242,10 +243,7 @@ describe('SkillLoader.collectAllSkills', () => {
   let loader: SkillLoader;
 
   beforeEach(async () => {
-    testRoot = join(
-      tmpdir(),
-      `carapace-skill-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
+    testRoot = uniqueTmpDir();
     await mkdir(testRoot, { recursive: true });
     loader = new SkillLoader({ pluginsDir: testRoot });
   });
@@ -288,5 +286,280 @@ describe('SkillLoader.collectAllSkills', () => {
       .map((s) => s.filename);
     const unique = new Set(intrinsicNames);
     expect(unique.size).toBe(intrinsicNames.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// discoverAllSkills() — dual-directory discovery
+// ---------------------------------------------------------------------------
+
+describe('SkillLoader.discoverAllSkills', () => {
+  let userPluginsDir: string;
+  let builtinPluginsDir: string;
+  let loader: SkillLoader;
+
+  beforeEach(async () => {
+    userPluginsDir = uniqueTmpDir();
+    builtinPluginsDir = uniqueTmpDir();
+    await mkdir(userPluginsDir, { recursive: true });
+    await mkdir(builtinPluginsDir, { recursive: true });
+    loader = new SkillLoader({
+      pluginsDir: userPluginsDir,
+      builtinPluginsDir,
+    });
+  });
+
+  afterEach(async () => {
+    await rm(userPluginsDir, { recursive: true, force: true });
+    await rm(builtinPluginsDir, { recursive: true, force: true });
+  });
+
+  it('discovers skills from both built-in and user directories', async () => {
+    await createPluginDir(builtinPluginsDir, 'memory', {
+      'memory.md': '# Memory',
+    });
+    await createPluginDir(userPluginsDir, 'reminders', {
+      'reminders.md': '# Reminders',
+    });
+
+    const result = await loader.discoverAllSkills();
+    expect(result.skills).toHaveLength(2);
+    const plugins = result.skills.map((s) => s.pluginName).sort();
+    expect(plugins).toEqual(['memory', 'reminders']);
+  });
+
+  it('handles missing built-in plugins directory gracefully', async () => {
+    await rm(builtinPluginsDir, { recursive: true, force: true });
+    await createPluginDir(userPluginsDir, 'reminders', {
+      'reminders.md': '# Reminders',
+    });
+
+    const result = await loader.discoverAllSkills();
+    expect(result.skills).toHaveLength(1);
+    expect(result.skills[0]!.pluginName).toBe('reminders');
+  });
+
+  it('handles missing user plugins directory gracefully', async () => {
+    await rm(userPluginsDir, { recursive: true, force: true });
+    await createPluginDir(builtinPluginsDir, 'memory', {
+      'memory.md': '# Memory',
+    });
+
+    const result = await loader.discoverAllSkills();
+    expect(result.skills).toHaveLength(1);
+    expect(result.skills[0]!.pluginName).toBe('memory');
+  });
+
+  it('handles both directories missing gracefully', async () => {
+    await rm(userPluginsDir, { recursive: true, force: true });
+    await rm(builtinPluginsDir, { recursive: true, force: true });
+
+    const result = await loader.discoverAllSkills();
+    expect(result.skills).toHaveLength(0);
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  it('includes skills from same-named plugins in both directories', async () => {
+    await createPluginDir(builtinPluginsDir, 'memory', {
+      'memory.md': '# Memory (builtin)',
+    });
+    await createPluginDir(userPluginsDir, 'memory', {
+      'memory.md': '# Memory (user)',
+    });
+
+    const result = await loader.discoverAllSkills();
+    // Both are included — namespacing in aggregation prevents collisions
+    expect(result.skills).toHaveLength(2);
+    const contents = result.skills.map((s) => s.content);
+    expect(contents).toContain('# Memory (builtin)');
+    expect(contents).toContain('# Memory (user)');
+  });
+
+  it('works without builtinPluginsDir configured', async () => {
+    const loaderNoBuiltin = new SkillLoader({ pluginsDir: userPluginsDir });
+    await createPluginDir(userPluginsDir, 'reminders', {
+      'reminders.md': '# Reminders',
+    });
+
+    const result = await loaderNoBuiltin.discoverAllSkills();
+    expect(result.skills).toHaveLength(1);
+    expect(result.skills[0]!.pluginName).toBe('reminders');
+  });
+
+  it('returns sorted results across both directories', async () => {
+    await createPluginDir(builtinPluginsDir, 'zeta', {
+      'zeta.md': '# Zeta',
+    });
+    await createPluginDir(userPluginsDir, 'alpha', {
+      'alpha.md': '# Alpha',
+    });
+
+    const result = await loader.discoverAllSkills();
+    expect(result.skills.map((s) => s.pluginName)).toEqual(['alpha', 'zeta']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// aggregateSkills()
+// ---------------------------------------------------------------------------
+
+describe('SkillLoader.aggregateSkills', () => {
+  let userPluginsDir: string;
+  let builtinPluginsDir: string;
+  let skillsOutputDir: string;
+  let loader: SkillLoader;
+
+  beforeEach(async () => {
+    userPluginsDir = uniqueTmpDir();
+    builtinPluginsDir = uniqueTmpDir();
+    skillsOutputDir = uniqueTmpDir();
+    await mkdir(userPluginsDir, { recursive: true });
+    await mkdir(builtinPluginsDir, { recursive: true });
+    loader = new SkillLoader({
+      pluginsDir: userPluginsDir,
+      builtinPluginsDir,
+      skillsOutputDir,
+    });
+  });
+
+  afterEach(async () => {
+    await rm(userPluginsDir, { recursive: true, force: true });
+    await rm(builtinPluginsDir, { recursive: true, force: true });
+    await rm(skillsOutputDir, { recursive: true, force: true });
+  });
+
+  it('writes namespaced skill files to the output directory', async () => {
+    await createPluginDir(userPluginsDir, 'reminders', {
+      'reminders.md': '# Reminders content',
+    });
+
+    await loader.aggregateSkills();
+
+    const files = await readdir(skillsOutputDir);
+    expect(files).toContain('reminders-reminders.md');
+
+    const content = await readFile(join(skillsOutputDir, 'reminders-reminders.md'), 'utf-8');
+    expect(content).toBe('# Reminders content');
+  });
+
+  it('writes intrinsic skills with _intrinsic prefix', async () => {
+    await loader.aggregateSkills();
+
+    const files = await readdir(skillsOutputDir);
+    expect(files).toContain('_intrinsic-get_diagnostics.md');
+    expect(files).toContain('_intrinsic-list_tools.md');
+    expect(files).toContain('_intrinsic-get_session_info.md');
+  });
+
+  it('aggregates skills from both built-in and user directories', async () => {
+    await createPluginDir(builtinPluginsDir, 'memory', {
+      'memory.md': '# Memory',
+    });
+    await createPluginDir(userPluginsDir, 'reminders', {
+      'reminders.md': '# Reminders',
+    });
+
+    const result = await loader.aggregateSkills();
+
+    const files = await readdir(skillsOutputDir);
+    expect(files).toContain('memory-memory.md');
+    expect(files).toContain('reminders-reminders.md');
+    // Plus 3 intrinsic skills
+    expect(files).toHaveLength(5);
+    expect(result.skills).toHaveLength(5);
+  });
+
+  it('namespacing prevents collisions between same-named skill files', async () => {
+    // Two plugins both have a skill named "help.md"
+    await createPluginDir(userPluginsDir, 'alpha', {
+      'help.md': '# Alpha Help',
+    });
+    await createPluginDir(userPluginsDir, 'beta', {
+      'help.md': '# Beta Help',
+    });
+
+    await loader.aggregateSkills();
+
+    const files = await readdir(skillsOutputDir);
+    expect(files).toContain('alpha-help.md');
+    expect(files).toContain('beta-help.md');
+
+    const alphaContent = await readFile(join(skillsOutputDir, 'alpha-help.md'), 'utf-8');
+    const betaContent = await readFile(join(skillsOutputDir, 'beta-help.md'), 'utf-8');
+    expect(alphaContent).toBe('# Alpha Help');
+    expect(betaContent).toBe('# Beta Help');
+  });
+
+  it('is idempotent — running twice produces the same result', async () => {
+    await createPluginDir(userPluginsDir, 'reminders', {
+      'reminders.md': '# Reminders',
+    });
+
+    await loader.aggregateSkills();
+    const firstFiles = (await readdir(skillsOutputDir)).sort();
+
+    await loader.aggregateSkills();
+    const secondFiles = (await readdir(skillsOutputDir)).sort();
+
+    expect(secondFiles).toEqual(firstFiles);
+  });
+
+  it('clears stale files from previous aggregation', async () => {
+    // First aggregation with plugin A
+    await createPluginDir(userPluginsDir, 'alpha', {
+      'alpha.md': '# Alpha',
+    });
+    await loader.aggregateSkills();
+    expect(await readdir(skillsOutputDir)).toContain('alpha-alpha.md');
+
+    // Remove plugin A, add plugin B
+    await rm(join(userPluginsDir, 'alpha'), { recursive: true, force: true });
+    await createPluginDir(userPluginsDir, 'beta', {
+      'beta.md': '# Beta',
+    });
+
+    await loader.aggregateSkills();
+    const files = await readdir(skillsOutputDir);
+    expect(files).not.toContain('alpha-alpha.md');
+    expect(files).toContain('beta-beta.md');
+  });
+
+  it('handles missing plugins directories gracefully', async () => {
+    await rm(userPluginsDir, { recursive: true, force: true });
+    await rm(builtinPluginsDir, { recursive: true, force: true });
+
+    const result = await loader.aggregateSkills();
+
+    // Only intrinsic skills should be written
+    const files = await readdir(skillsOutputDir);
+    expect(files).toHaveLength(3);
+    expect(result.skills).toHaveLength(3);
+    expect(result.skills.every((s) => s.pluginName === '_intrinsic')).toBe(true);
+  });
+
+  it('creates output directory if it does not exist', async () => {
+    await rm(skillsOutputDir, { recursive: true, force: true });
+
+    await loader.aggregateSkills();
+
+    const files = await readdir(skillsOutputDir);
+    expect(files.length).toBeGreaterThan(0);
+  });
+
+  it('throws when skillsOutputDir is not configured', async () => {
+    const loaderNoOutput = new SkillLoader({
+      pluginsDir: userPluginsDir,
+      builtinPluginsDir,
+    });
+
+    await expect(loaderNoOutput.aggregateSkills()).rejects.toThrow(/skillsOutputDir/);
+  });
+
+  it('returns warnings from plugin discovery', async () => {
+    // Create a plugin dir without a skills/ subdirectory
+    await mkdir(join(userPluginsDir, 'broken-plugin'), { recursive: true });
+
+    const result = await loader.aggregateSkills();
+    expect(result.warnings.some((w) => w.includes('broken-plugin'))).toBe(true);
   });
 });
