@@ -88,6 +88,31 @@ export const MANIFEST_JSON_SCHEMA = {
         },
       },
     },
+
+    credentialSpec: {
+      type: 'object' as const,
+      required: ['key', 'description', 'required'],
+      additionalProperties: false,
+      properties: {
+        key: { type: 'string' },
+        description: { type: 'string' },
+        required: { type: 'boolean' },
+        obtain_url: { type: 'string' },
+        format_hint: { type: 'string' },
+      },
+    },
+
+    installSpec: {
+      type: 'object' as const,
+      required: ['credentials'],
+      additionalProperties: false,
+      properties: {
+        credentials: {
+          type: 'array',
+          items: { $ref: '#/$defs/credentialSpec' },
+        },
+      },
+    },
   },
 
   properties: {
@@ -114,10 +139,15 @@ export const MANIFEST_JSON_SCHEMA = {
       type: 'array',
       items: { type: 'string' },
     },
+    allowed_groups: {
+      type: 'array',
+      items: { type: 'string' },
+    },
     session: {
       type: 'string',
       enum: ['fresh', 'resume', 'explicit'],
     },
+    install: { $ref: '#/$defs/installSpec' },
     config_schema: { $ref: '#/$defs/configSchema' },
   },
 } as const;

@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import type { RiskLevel, Author, JsonSchema, ToolDeclaration, PluginManifest } from './manifest.js';
+import type {
+  RiskLevel,
+  Author,
+  JsonSchema,
+  ToolDeclaration,
+  CredentialSpec,
+  InstallSpec,
+  PluginManifest,
+} from './manifest.js';
 
 function remindersManifest(): PluginManifest {
   return {
@@ -137,6 +145,97 @@ describe('manifest types', () => {
 
       const full: Author = { name: 'Test', url: 'https://example.com' };
       expect(full.url).toBe('https://example.com');
+    });
+  });
+
+  describe('CredentialSpec', () => {
+    it('requires key, description, and required fields', () => {
+      const cred: CredentialSpec = {
+        key: 'API_KEY',
+        description: 'Your API key',
+        required: true,
+      };
+      expect(cred.key).toBe('API_KEY');
+      expect(cred.description).toBe('Your API key');
+      expect(cred.required).toBe(true);
+      expect(cred.obtain_url).toBeUndefined();
+      expect(cred.format_hint).toBeUndefined();
+    });
+
+    it('accepts optional obtain_url and format_hint', () => {
+      const cred: CredentialSpec = {
+        key: 'BOT_TOKEN',
+        description: 'Telegram bot token',
+        required: true,
+        obtain_url: 'https://t.me/BotFather',
+        format_hint: '123456:ABC-DEF...',
+      };
+      expect(cred.obtain_url).toBe('https://t.me/BotFather');
+      expect(cred.format_hint).toBe('123456:ABC-DEF...');
+    });
+  });
+
+  describe('InstallSpec', () => {
+    it('requires a credentials array', () => {
+      const install: InstallSpec = {
+        credentials: [
+          {
+            key: 'API_KEY',
+            description: 'Your API key',
+            required: true,
+          },
+        ],
+      };
+      expect(install.credentials).toHaveLength(1);
+    });
+
+    it('accepts an empty credentials array', () => {
+      const install: InstallSpec = { credentials: [] };
+      expect(install.credentials).toHaveLength(0);
+    });
+  });
+
+  describe('PluginManifest with install', () => {
+    it('allows install to be omitted (backward compatible)', () => {
+      const manifest: PluginManifest = {
+        description: 'Minimal plugin',
+        version: '0.1.0',
+        app_compat: '>=0.1.0',
+        author: { name: 'Test' },
+        provides: { channels: [], tools: [] },
+        subscribes: [],
+      };
+      expect(manifest.install).toBeUndefined();
+    });
+
+    it('accepts a manifest with install.credentials', () => {
+      const manifest: PluginManifest = {
+        description: 'Plugin with credentials',
+        version: '1.0.0',
+        app_compat: '>=0.1.0',
+        author: { name: 'Test' },
+        provides: { channels: [], tools: [] },
+        subscribes: [],
+        install: {
+          credentials: [
+            {
+              key: 'TELEGRAM_BOT_TOKEN',
+              description: 'Telegram Bot API token from @BotFather',
+              required: true,
+              obtain_url: 'https://t.me/BotFather',
+              format_hint: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11',
+            },
+            {
+              key: 'WEBHOOK_SECRET',
+              description: 'Optional webhook verification secret',
+              required: false,
+            },
+          ],
+        },
+      };
+      expect(manifest.install!.credentials).toHaveLength(2);
+      expect(manifest.install!.credentials[0].key).toBe('TELEGRAM_BOT_TOKEN');
+      expect(manifest.install!.credentials[1].required).toBe(false);
     });
   });
 });
