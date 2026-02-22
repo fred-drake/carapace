@@ -282,8 +282,20 @@ describe('CARAPACE_SUBDIRS', () => {
     expect(CARAPACE_SUBDIRS).toContain('data/audit');
     expect(CARAPACE_SUBDIRS).toContain('data/memory');
     expect(CARAPACE_SUBDIRS).toContain('credentials');
+    expect(CARAPACE_SUBDIRS).toContain('credentials/plugins');
     expect(CARAPACE_SUBDIRS).toContain('run');
     expect(CARAPACE_SUBDIRS).toContain('run/sockets');
+    expect(CARAPACE_SUBDIRS).toContain('run/skills');
+  });
+
+  it('lists parents before children', () => {
+    const credentialsIdx = CARAPACE_SUBDIRS.indexOf('credentials');
+    const credentialsPluginsIdx = CARAPACE_SUBDIRS.indexOf('credentials/plugins');
+    expect(credentialsIdx).toBeLessThan(credentialsPluginsIdx);
+
+    const runIdx = CARAPACE_SUBDIRS.indexOf('run');
+    const runSkillsIdx = CARAPACE_SUBDIRS.indexOf('run/skills');
+    expect(runIdx).toBeLessThan(runSkillsIdx);
   });
 });
 
@@ -343,6 +355,21 @@ describe('ensureDirectoryStructure', () => {
     expect(mode).toBe(0o700);
   });
 
+  it('creates credentials/plugins with 0700 permissions', () => {
+    ensureDirectoryStructure(testRoot);
+    const credPluginsPath = join(testRoot, 'credentials/plugins');
+    expect(existsSync(credPluginsPath)).toBe(true);
+    const stats = statSync(credPluginsPath);
+    const mode = stats.mode & 0o777;
+    expect(mode).toBe(0o700);
+  });
+
+  it('creates run/skills directory', () => {
+    ensureDirectoryStructure(testRoot);
+    const runSkillsPath = join(testRoot, 'run/skills');
+    expect(existsSync(runSkillsPath)).toBe(true);
+  });
+
   it('creates root directory if it does not exist', () => {
     const nested = join(testRoot, 'deep', 'nested');
     ensureDirectoryStructure(nested);
@@ -357,8 +384,10 @@ describe('ensureDirectoryStructure', () => {
     expect(result.mutableDirs).toContain(join(testRoot, 'data/audit'));
     expect(result.mutableDirs).toContain(join(testRoot, 'data/memory'));
     expect(result.mutableDirs).toContain(join(testRoot, 'credentials'));
+    expect(result.mutableDirs).toContain(join(testRoot, 'credentials/plugins'));
     expect(result.mutableDirs).toContain(join(testRoot, 'run'));
     expect(result.mutableDirs).toContain(join(testRoot, 'run/sockets'));
+    expect(result.mutableDirs).toContain(join(testRoot, 'run/skills'));
     // Immutable directories (installed artifacts, read-only)
     expect(result.immutableDirs).toContain(join(testRoot, 'bin'));
     expect(result.immutableDirs).toContain(join(testRoot, 'lib'));
