@@ -2637,7 +2637,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
 > - Installer is a built-in plugin (ships with Carapace, non-removable)
 > - No SQLite registry — filesystem + git metadata is the source of truth
 
-### INST-01: Extend manifest types with `install.credentials`
+### ~~INST-01: Extend manifest types with `install.credentials`~~ DONE
+
+**Status**: Completed (PR #163, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: S | **Role**: Engineer
 - **Depends on**: None
@@ -2656,7 +2658,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
   tests still pass.
 - **Files**: `src/types/manifest.ts`, `src/types/manifest-schema.ts`
 
-### INST-02: Add `readCredential()` to CoreServices and wire into PluginLoader
+### ~~INST-02: Add `readCredential()` to CoreServices and wire into PluginLoader~~ DONE
+
+**Status**: Completed (PR #167, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: S | **Role**: Engineer
 - **Depends on**: None
@@ -2674,7 +2678,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
 - **Files**: `src/core/plugin-handler.ts`, `src/core/plugin-loader.ts`,
   `src/main.ts`
 
-### INST-03: Add `credentials/plugins` to CARAPACE_SUBDIRS
+### ~~INST-03: Add `credentials/plugins` to CARAPACE_SUBDIRS~~ DONE
+
+**Status**: Completed (PR #162, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: S | **Role**: Engineer
 - **Depends on**: None
@@ -2693,7 +2699,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
   `run/skills/` is created. Existing credential security tests pass.
 - **Files**: `src/types/config.ts`
 
-### INST-04: Add optional `verify()` to PluginHandler interface
+### ~~INST-04: Add optional `verify()` to PluginHandler interface~~ DONE
+
+**Status**: Completed (PR #161, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: S | **Role**: Engineer
 - **Depends on**: None
@@ -2708,7 +2716,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
   Type exports are correct. Type-check passes.
 - **Files**: `src/core/plugin-handler.ts`
 
-### INST-05: Implement GitOps interface and RealGitOps
+### ~~INST-05: Implement GitOps interface and RealGitOps~~ DONE
+
+**Status**: Completed (PR #164, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: M | **Role**: Engineer
 - **Depends on**: None
@@ -2726,7 +2736,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
 - **Files**: `src/plugins/installer/git-ops.ts`,
   `src/plugins/installer/git-ops.test.ts`
 
-### INST-06: Implement git-sanitizer module
+### ~~INST-06: Implement git-sanitizer module~~ DONE
+
+**Status**: Completed (PR #166, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: S | **Role**: Security
 - **Depends on**: INST-05
@@ -2749,7 +2761,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
 - **Files**: `src/plugins/installer/git-sanitizer.ts`,
   `src/plugins/installer/git-sanitizer.test.ts`
 
-### INST-07: Implement InstallerHandler — plugin_install tool
+### ~~INST-07: Implement InstallerHandler — plugin_install tool~~ DONE
+
+**Status**: Completed (PR #168, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: M | **Role**: Engineer
 - **Depends on**: INST-01, INST-03, INST-05, INST-06
@@ -2776,7 +2790,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
 - **Files**: `src/plugins/installer/handler.ts`,
   `src/plugins/installer/handler.test.ts`
 
-### INST-08: Implement InstallerHandler — plugin_verify tool
+### ~~INST-08: Implement InstallerHandler — plugin_verify tool~~ DONE
+
+**Status**: Completed (PR #172, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: M | **Role**: Engineer
 - **Depends on**: INST-07, INST-04
@@ -2798,7 +2814,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
 - **Files**: `src/plugins/installer/handler.ts`,
   `src/plugins/installer/handler.test.ts`
 
-### INST-09: Implement InstallerHandler — plugin_list, plugin_remove, plugin_update, plugin_configure
+### ~~INST-09: Implement InstallerHandler — plugin_list, plugin_remove, plugin_update, plugin_configure~~ DONE
+
+**Status**: Completed (PR #170, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: M | **Role**: Engineer
 - **Depends on**: INST-07
@@ -2825,7 +2843,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
 - **Files**: `src/plugins/installer/handler.ts`,
   `src/plugins/installer/handler.test.ts`
 
-### INST-10: Create installer plugin manifest and skill file
+### ~~INST-10: Create installer plugin manifest and skill file~~ DONE
+
+**Status**: Completed (PR #169, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: S | **Role**: DX Advocate
 - **Depends on**: INST-07
@@ -2850,7 +2870,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
 - **Files**: `src/plugins/installer/manifest.json`,
   `src/plugins/installer/skills/installer.md`
 
-### INST-11: Security tests — credential bypass and clone safety
+### ~~INST-11: Security tests — credential bypass and clone safety~~ DONE
+
+**Status**: Completed (PR #174, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: M | **Role**: QA
 - **Depends on**: INST-08, INST-06
@@ -2873,7 +2895,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
   passes.
 - **Files**: `src/plugins/installer/install-security.security.test.ts`
 
-### INST-12: Integration tests — full install/verify/update/remove lifecycle
+### ~~INST-12: Integration tests — full install/verify/update/remove lifecycle~~ DONE
+
+**Status**: Completed (PR #173, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: M | **Role**: QA
 - **Depends on**: INST-09, INST-08
@@ -2894,7 +2918,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
 - **Files**: `src/plugins/installer/install-flow.integration.test.ts`,
   `src/testing/fixtures/create-plugin-repo.ts`
 
-### INST-13: Wire installer plugin into PluginLoader as built-in
+### ~~INST-13: Wire installer plugin into PluginLoader as built-in~~ DONE
+
+**Status**: Completed (PR #175, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: S | **Role**: Engineer
 - **Depends on**: INST-09, INST-10
@@ -2912,7 +2938,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
   Type-check passes.
 - **Files**: `src/core/plugin-loader.ts`, `src/main.ts`
 
-### INST-14: Dynamic skills aggregation for container mounting
+### ~~INST-14: Dynamic skills aggregation for container mounting~~ DONE
+
+**Status**: Completed (PR #165, merged 2026-02-22)
 
 - **Priority**: P1 | **Complexity**: M | **Role**: DevOps
 - **Depends on**: INST-03
@@ -2933,7 +2961,9 @@ policy control (fresh/resume/explicit) to the event dispatch pipeline.
 - **Files**: `src/core/skill-loader.ts`, `src/types/config.ts`,
   `src/core/server.ts`, `src/main.ts`, container runtime adapters
 
-### INST-15: E2E test — full plugin install lifecycle
+### ~~INST-15: E2E test — full plugin install lifecycle~~ DONE
+
+**Status**: Completed (PR #176, merged 2026-02-22)
 
 - **Priority**: P2 | **Complexity**: L | **Role**: QA
 - **Depends on**: INST-13, INST-14
