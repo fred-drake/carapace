@@ -154,6 +154,7 @@ function createServices(): CoreServices {
     getAuditLog: vi.fn(async () => []),
     getToolCatalog: vi.fn(() => []),
     getSessionInfo: vi.fn(() => ({ group: '', sessionId: '', startedAt: '' })),
+    readCredential: vi.fn(() => ''),
   };
 }
 
