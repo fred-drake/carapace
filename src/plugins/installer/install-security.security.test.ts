@@ -366,7 +366,7 @@ describe('InstallerHandler Security Tests', () => {
       const sanitizer = new ResponseSanitizer();
 
       const detail = {
-        token: 'sk-proj-abcdefghijklmnop',
+        token: 'sk-abcdefghijklmnop',
         aws_key: 'AKIAIOSFODNN7EXAMPLE',
         db_url: 'postgres://admin:password@localhost:5432/db',
         safe_field: 'just a normal string',
