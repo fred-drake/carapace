@@ -152,12 +152,18 @@ export const CARAPACE_SUBDIRS = [
   'data/audit',
   'data/memory',
   'credentials',
+  'credentials/plugins',
   'run',
   'run/sockets',
+  'run/skills',
 ] as const;
 
 /** Subdirectories that require restricted permissions (0700). */
-const RESTRICTED_DIRS: ReadonlySet<string> = new Set(['credentials', 'run/sockets']);
+const RESTRICTED_DIRS: ReadonlySet<string> = new Set([
+  'credentials',
+  'credentials/plugins',
+  'run/sockets',
+]);
 
 /** Subdirectories that are mutable at runtime. */
 const MUTABLE_SUBDIRS: ReadonlySet<string> = new Set([
@@ -166,8 +172,10 @@ const MUTABLE_SUBDIRS: ReadonlySet<string> = new Set([
   'data/audit',
   'data/memory',
   'credentials',
+  'credentials/plugins',
   'run',
   'run/sockets',
+  'run/skills',
 ]);
 
 /** Result of `ensureDirectoryStructure()` with resolved paths. */
