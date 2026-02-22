@@ -7,6 +7,7 @@ import type {
   SessionInfo,
   AuditLogFilter,
   AuditLogEntry,
+  PluginVerifyResult,
 } from './plugin-handler.js';
 import { formatErrorMessage } from './plugin-handler.js';
 
@@ -35,6 +36,51 @@ describe('PluginHandler interface', () => {
     };
 
     expect(handler.handleEvent).toBeUndefined();
+  });
+
+  it('verify is optional', () => {
+    const handler: PluginHandler = {
+      initialize: async () => {},
+      handleToolInvocation: async () => ({ ok: true, result: {} }),
+      shutdown: async () => {},
+    };
+
+    expect(handler.verify).toBeUndefined();
+  });
+
+  it('can implement verify()', async () => {
+    const handler: PluginHandler = {
+      initialize: async () => {},
+      handleToolInvocation: async () => ({ ok: true, result: {} }),
+      verify: async (): Promise<PluginVerifyResult> => ({
+        ok: true,
+        message: 'Smoke test passed',
+      }),
+      shutdown: async () => {},
+    };
+
+    expect(handler.verify).toBeDefined();
+    const result = await handler.verify!();
+    expect(result.ok).toBe(true);
+    expect(result.message).toBe('Smoke test passed');
+  });
+
+  it('verify() can return failure with detail', async () => {
+    const handler: PluginHandler = {
+      initialize: async () => {},
+      handleToolInvocation: async () => ({ ok: true, result: {} }),
+      verify: async (): Promise<PluginVerifyResult> => ({
+        ok: false,
+        message: 'API key expired',
+        detail: { endpoint: 'https://api.example.com', statusCode: 401 },
+      }),
+      shutdown: async () => {},
+    };
+
+    const result = await handler.verify!();
+    expect(result.ok).toBe(false);
+    expect(result.message).toBe('API key expired');
+    expect(result.detail).toEqual({ endpoint: 'https://api.example.com', statusCode: 401 });
   });
 });
 
@@ -238,6 +284,20 @@ describe('Type-level tests (autocomplete verification)', () => {
     expectTypeOf<PluginHandler['handleToolInvocation']>().toBeFunction();
     expectTypeOf<PluginHandler['shutdown']>().toBeFunction();
     expectTypeOf<PluginHandler['handleEvent']>().toEqualTypeOf<PluginHandler['handleEvent']>();
+    expectTypeOf<PluginHandler['verify']>().toEqualTypeOf<PluginHandler['verify']>();
+  });
+
+  it('PluginVerifyResult has ok, message, and optional detail', () => {
+    expectTypeOf<PluginVerifyResult>().toHaveProperty('ok');
+    expectTypeOf<PluginVerifyResult>().toHaveProperty('message');
+    const result: PluginVerifyResult = { ok: true, message: 'passed' };
+    expectTypeOf(result).toMatchTypeOf<PluginVerifyResult>();
+    const withDetail: PluginVerifyResult = {
+      ok: false,
+      message: 'failed',
+      detail: { reason: 'timeout' },
+    };
+    expectTypeOf(withDetail).toMatchTypeOf<PluginVerifyResult>();
   });
 
   it('CoreServices has typed method signatures', () => {
