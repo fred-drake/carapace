@@ -10,6 +10,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./plugin": {
+      "import": "./dist/plugin-api.js",
+      "types": "./dist/plugin-api.d.ts"
     }
   },
   "engines": {
