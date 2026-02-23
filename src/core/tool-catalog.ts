@@ -57,6 +57,18 @@ export class ToolCatalog {
   }
 
   /**
+   * Remove a tool from the catalog.
+   *
+   * @param toolName - The name of the tool to unregister.
+   * @returns `true` if the tool existed and was removed, `false` otherwise.
+   */
+  unregister(toolName: string): boolean {
+    const existed = this.entries.delete(toolName);
+    if (existed) this.logger.debug('tool unregistered', { toolName });
+    return existed;
+  }
+
+  /**
    * Check whether a tool with the given name is registered.
    */
   has(toolName: string): boolean {

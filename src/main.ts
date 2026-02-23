@@ -185,6 +185,7 @@ function createStartServer(
   const socketDir = join(home, 'run', 'sockets');
   const pluginsDir = join(home, 'plugins');
   const promptsDir = join(home, 'run', 'prompts');
+  const reloadDir = join(home, 'run', 'reload');
   const credentialsDir = join(home, 'credentials');
   const skillsDir = join(home, 'run', 'skills');
   const builtinPluginsDir = join(home, 'lib', 'plugins');
@@ -195,6 +196,7 @@ function createStartServer(
     pluginsDir,
     builtinPluginsDir,
     promptsDir,
+    reloadDir,
     credentialsDir,
     credentialsPluginsDir,
     containerImage: readCurrentImageTag(home),

@@ -28,6 +28,7 @@ import {
 } from './auth-command.js';
 import { isImageCurrent } from './core/image-identity.js';
 import { runPrompt, type PromptDeps } from './prompt-command.js';
+import { runReload, type ReloadDeps } from './reload-command.js';
 
 // ---------------------------------------------------------------------------
 // CLI dependency injection
@@ -188,6 +189,7 @@ Commands:
   status           Show whether Carapace is running
   doctor           Check dependencies and configuration
   prompt "text"    Submit a prompt to a running Carapace agent
+  reload [plugin]  Hot-reload plugins and skills
   uninstall        Remove Carapace installation
   auth api-key     Configure Anthropic API key
   auth login       Configure OAuth token
@@ -234,6 +236,8 @@ export async function runCommand(
       return doctor(deps);
     case 'prompt':
       return prompt(deps, options ?? {}, positionals ?? []);
+    case 'reload':
+      return reload(deps, positionals ?? []);
     case 'uninstall':
       return uninstall(deps, flags ?? {});
     case 'auth':
@@ -550,6 +554,32 @@ export async function prompt(
   };
 
   return runPrompt(promptDeps, promptText, group);
+}
+
+// ---------------------------------------------------------------------------
+// reload
+// ---------------------------------------------------------------------------
+
+/**
+ * Trigger a hot-reload of plugins and skills on the running server.
+ *
+ * Writes a reload trigger file to the reload directory for the
+ * server to pick up and process.
+ */
+export async function reload(deps: CliDeps, positionals: string[]): Promise<number> {
+  const pluginName = positionals[0]?.trim() || undefined;
+
+  const reloadDeps: ReloadDeps = {
+    stdout: deps.stdout,
+    stderr: deps.stderr,
+    home: deps.home,
+    readPidFile: deps.readPidFile,
+    processExists: deps.processExists,
+    writeFile: deps.writeFile,
+    ensureDir: deps.ensureDir ?? (() => {}),
+  };
+
+  return runReload(reloadDeps, pluginName);
 }
 
 // ---------------------------------------------------------------------------

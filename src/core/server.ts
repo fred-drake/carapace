@@ -69,6 +69,8 @@ export interface ServerConfig {
   networkName?: string;
   /** Aggregated skills output directory ($CARAPACE_HOME/run/skills/). */
   skillsDir?: string;
+  /** Directory to watch for CLI-submitted reload trigger files. */
+  reloadDir?: string;
 }
 
 /** Minimal filesystem interface for prompt file watching. */
@@ -139,6 +141,8 @@ export class Server {
   private claudeSessionStore: ClaudeSessionStore | null = null;
   private skillLoader: SkillLoader | null = null;
   private promptPollTimer: ReturnType<typeof setInterval> | null = null;
+  private reloadPollTimer: ReturnType<typeof setInterval> | null = null;
+  private reloading = false;
   private started = false;
 
   // Exposed for orchestrator chain inspection (e.g. by downstream tasks)
@@ -374,6 +378,11 @@ export class Server {
       this.startPromptPolling(this.config.promptsDir, this.eventDispatcher);
     }
 
+    // 8a. Start reload file polling (if reloadDir is configured)
+    if (this.config.reloadDir) {
+      this.startReloadPolling(this.config.reloadDir);
+    }
+
     this.started = true;
 
     // 9. Report ready
@@ -395,10 +404,14 @@ export class Server {
 
     this.logger.info('server stopping');
 
-    // 0. Stop prompt polling
+    // 0. Stop prompt polling and reload polling
     if (this.promptPollTimer) {
       clearInterval(this.promptPollTimer);
       this.promptPollTimer = null;
+    }
+    if (this.reloadPollTimer) {
+      clearInterval(this.reloadPollTimer);
+      this.reloadPollTimer = null;
     }
 
     // 1. Unsubscribe from event bus (before closing sockets)
@@ -565,6 +578,152 @@ export class Server {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Private: reload file polling
+  // -------------------------------------------------------------------------
+
+  /**
+   * Reload all plugins and re-aggregate skills.
+   *
+   * Guarded against concurrent invocations by a boolean flag.
+   */
+  async reloadPlugins(): Promise<void> {
+    if (this.reloading) {
+      this.logger.warn('reload already in progress, skipping');
+      return;
+    }
+    this.reloading = true;
+
+    try {
+      this.logger.info('plugin reload starting');
+
+      if (this.pluginLoader) {
+        const results = await this.pluginLoader.reloadAll();
+        const succeeded = results.filter((r) => r.ok).length;
+        const failed = results.filter((r) => !r.ok).length;
+        this.logger.info('plugin reload complete', { succeeded, failed });
+        this.output(`Plugins reloaded: ${succeeded} succeeded, ${failed} failed`);
+      }
+
+      if (this.skillLoader) {
+        await this.skillLoader.aggregateSkills();
+        this.logger.info('skills re-aggregated');
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn('plugin reload failed', { error: message });
+      this.output(`Plugin reload error: ${message}`);
+    } finally {
+      this.reloading = false;
+    }
+  }
+
+  /**
+   * Reload a single plugin by name and re-aggregate skills.
+   *
+   * Guarded against concurrent invocations (shared with reloadPlugins).
+   */
+  private async reloadSinglePlugin(pluginName: string): Promise<void> {
+    if (this.reloading) {
+      this.logger.warn('reload already in progress, skipping single-plugin reload', { pluginName });
+      return;
+    }
+    this.reloading = true;
+
+    try {
+      if (this.pluginLoader) {
+        const result = await this.pluginLoader.reloadPlugin(pluginName);
+        if (result.ok) {
+          this.output(`Plugin "${pluginName}" reloaded successfully`);
+        } else {
+          this.output(`Plugin "${pluginName}" reload failed: ${result.error}`);
+        }
+      }
+
+      if (this.skillLoader) {
+        await this.skillLoader.aggregateSkills();
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn('single-plugin reload failed', { pluginName, error: message });
+      this.output(`Plugin "${pluginName}" reload error: ${message}`);
+    } finally {
+      this.reloading = false;
+    }
+  }
+
+  /**
+   * Start polling a directory for CLI-submitted reload trigger files.
+   *
+   * Files are JSON-serialized reload triggers written by `carapace reload`.
+   * Each file is read, consumed, and triggers a reload.
+   */
+  private startReloadPolling(reloadDir: string): void {
+    const fs = this.promptFs;
+    if (!fs) return;
+
+    // Ensure reload directory exists
+    if (!fs.existsSync(reloadDir)) {
+      fs.mkdirSync(reloadDir, { recursive: true });
+    }
+
+    this.reloadPollTimer = setInterval(() => {
+      this.processReloadFiles(reloadDir, fs);
+    }, Server.PROMPT_POLL_INTERVAL_MS);
+
+    // Don't let the timer keep the process alive
+    if (this.reloadPollTimer.unref) {
+      this.reloadPollTimer.unref();
+    }
+  }
+
+  /**
+   * Check the reload directory for new trigger files and process them.
+   */
+  private processReloadFiles(reloadDir: string, fs: PromptFs): void {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(reloadDir);
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) continue;
+
+      const filePath = join(reloadDir, entry);
+      try {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        const trigger = JSON.parse(content) as { id?: string; plugin?: string | null };
+        this.output(`Processing reload trigger: ${entry}`);
+
+        if (trigger.plugin) {
+          // Validate plugin name — reject path traversal
+          const pluginName = trigger.plugin;
+          if (pluginName.includes('/') || pluginName.includes('..') || pluginName.includes('\0')) {
+            this.logger.warn('reload trigger rejected — invalid plugin name', { pluginName });
+            this.output(`Reload rejected: invalid plugin name "${pluginName}"`);
+          } else {
+            // Single plugin reload — use concurrency guard
+            void this.reloadSinglePlugin(pluginName);
+          }
+        } else {
+          // Full reload
+          void this.reloadPlugins();
+        }
+
+        fs.unlinkSync(filePath);
+      } catch {
+        // Malformed file or read error — remove and continue
+        try {
+          fs.unlinkSync(filePath);
+        } catch {
+          // Already gone
+        }
+      }
+    }
+  }
+
   /**
    * Check the prompts directory for new files and dispatch them.
    */
@@ -579,7 +738,7 @@ export class Server {
     for (const entry of entries) {
       if (!entry.endsWith('.json')) continue;
 
-      const filePath = `${promptsDir}/${entry}`;
+      const filePath = join(promptsDir, entry);
       try {
         const content = fs.readFileSync(filePath, 'utf-8');
         const envelope = JSON.parse(content) as EventEnvelope;
