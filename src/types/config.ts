@@ -151,6 +151,7 @@ export const CARAPACE_SUBDIRS = [
   'data',
   'data/audit',
   'data/memory',
+  'data/claude-state',
   'credentials',
   'credentials/plugins',
   'run',
@@ -163,6 +164,7 @@ export const CARAPACE_SUBDIRS = [
 const RESTRICTED_DIRS: ReadonlySet<string> = new Set([
   'credentials',
   'credentials/plugins',
+  'data/claude-state',
   'run/sockets',
 ]);
 
@@ -172,6 +174,7 @@ const MUTABLE_SUBDIRS: ReadonlySet<string> = new Set([
   'data',
   'data/audit',
   'data/memory',
+  'data/claude-state',
   'credentials',
   'credentials/plugins',
   'run',

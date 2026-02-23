@@ -512,11 +512,15 @@ describe('auth', () => {
   });
 
   it('dispatches login subcommand', async () => {
-    const deps = createTestDeps();
+    const credContent = '{"accessToken":"abc","refreshToken":"xyz"}';
+    const deps = createTestDeps({
+      fileExists: vi.fn().mockImplementation((p: string) => p.includes('.credentials.json')),
+      readFile: vi.fn().mockReturnValue(credContent),
+    });
     const code = await auth(deps, 'login');
     expect(code).toBe(0);
     expect(deps.writeFileSecure).toHaveBeenCalledWith(
-      expect.stringContaining('claude-oauth-token'),
+      expect.stringContaining('claude-credentials.json'),
       expect.any(String),
       0o600,
     );

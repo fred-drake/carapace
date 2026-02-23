@@ -53,7 +53,9 @@ class ZmqDealerAdapter implements DealerSocket {
   }
 
   async send(payload: Buffer): Promise<void> {
-    await this.zmqDealer.send(payload);
+    // Send [empty-delimiter, payload] so the ROUTER receives
+    // [identity, delimiter, payload] — standard ZeroMQ DEALER/ROUTER convention.
+    await this.zmqDealer.send([Buffer.alloc(0), payload]);
   }
 
   on(_event: 'message', handler: DealerMessageHandler): void {
@@ -68,8 +70,11 @@ class ZmqDealerAdapter implements DealerSocket {
     // Start the async receive loop in the background.
     void (async () => {
       try {
-        for await (const [msg] of this.zmqDealer) {
-          const buf = Buffer.from(msg);
+        for await (const frames of this.zmqDealer) {
+          // ROUTER sends [identity, delimiter, payload]; DEALER receives
+          // [delimiter, payload] (identity stripped). Take the last frame
+          // as the actual payload regardless of how many frames arrive.
+          const buf = Buffer.from(frames[frames.length - 1]);
           for (const handler of this.handlers) {
             handler(buf);
           }

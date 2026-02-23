@@ -532,6 +532,28 @@ describe('RequestChannel', () => {
   });
 
   // -------------------------------------------------------------------------
+  // bindAdditional
+  // -------------------------------------------------------------------------
+
+  describe('bindAdditional', () => {
+    it('binds the ROUTER socket to a second address', async () => {
+      await channel.bind('ipc:///tmp/test-req.sock');
+      const router = factory.lastRouter!;
+
+      await channel.bindAdditional('tcp://0.0.0.0:5560');
+
+      // The fake socket records the last bind call
+      expect(router.boundAddress).toBe('tcp://0.0.0.0:5560');
+    });
+
+    it('throws if channel is not bound yet', async () => {
+      await expect(channel.bindAdditional('tcp://0.0.0.0:5560')).rejects.toThrow(
+        'RequestChannel is not bound — call bind() first',
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // logging
   // -------------------------------------------------------------------------
 
@@ -555,6 +577,16 @@ describe('RequestChannel', () => {
       const bindLog = logEntries.find((e) => e.msg === 'ROUTER socket bound');
       expect(bindLog).toBeDefined();
       expect(bindLog!.meta).toEqual({ address: 'ipc:///tmp/test-log.sock' });
+    });
+
+    it('logs additional bind address', async () => {
+      channel = new RequestChannel(factory);
+      await channel.bind('ipc:///tmp/test-log.sock');
+      await channel.bindAdditional('tcp://0.0.0.0:5560');
+
+      const additionalLog = logEntries.find((e) => e.msg === 'ROUTER socket bound (additional)');
+      expect(additionalLog).toBeDefined();
+      expect(additionalLog!.meta).toEqual({ address: 'tcp://0.0.0.0:5560' });
     });
 
     it('logs frame received on incoming request', async () => {

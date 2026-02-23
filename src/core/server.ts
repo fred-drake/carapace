@@ -31,7 +31,12 @@ import type { ContainerRuntime } from './container/runtime.js';
 import { ContainerLifecycleManager } from './container/lifecycle-manager.js';
 import { EventDispatcher } from './event-dispatcher.js';
 import { ClaudeSessionStore, CLAUDE_SESSION_MIGRATIONS } from './claude-session-store.js';
-import { readCredentialStdin, type CredentialFs } from './credential-reader.js';
+import {
+  readCredentialStdin,
+  prepareOAuthCredentials,
+  OAUTH_CREDENTIALS_FILENAME,
+  type CredentialPrepareFs,
+} from './credential-reader.js';
 import { createLogger, type Logger } from './logger.js';
 import { SkillLoader } from './skill-loader.js';
 
@@ -71,6 +76,14 @@ export interface ServerConfig {
   skillsDir?: string;
   /** Directory to watch for CLI-submitted reload trigger files. */
   reloadDir?: string;
+  /**
+   * TCP port for the request channel.
+   *
+   * When set, the ROUTER socket binds to `tcp://0.0.0.0:{port}` in
+   * addition to its IPC address. Required for Apple Containers where
+   * Unix domain sockets don't cross the VM boundary.
+   */
+  tcpRequestPort?: number;
 }
 
 /** Minimal filesystem interface for prompt file watching. */
@@ -104,8 +117,8 @@ export interface ServerDeps {
   containerRuntime?: ContainerRuntime;
   /** Filesystem abstraction for prompt file watching. */
   promptFs?: PromptFs;
-  /** Filesystem abstraction for credential reading. */
-  credentialFs?: CredentialFs;
+  /** Filesystem abstraction for credential reading and preparation. */
+  credentialFs?: CredentialPrepareFs;
   /** Logger instance for structured logging. */
   logger?: Logger;
   /** Pre-constructed built-in handlers to register before filesystem plugin discovery. */
@@ -125,7 +138,7 @@ export class Server {
   private readonly output: (msg: string) => void;
   private readonly containerRuntime: ContainerRuntime | undefined;
   private readonly promptFs: PromptFs | undefined;
-  private readonly credentialFs: CredentialFs | undefined;
+  private readonly credentialFs: CredentialPrepareFs | undefined;
   private readonly logger: Logger;
   private readonly builtinHandlers: BuiltinHandlerEntry[];
 
@@ -215,6 +228,13 @@ export class Server {
     );
     await this.requestChannel.bind(provision.requestAddress);
 
+    // Bind additional TCP endpoint for Apple Containers (VM isolation prevents IPC)
+    let tcpRequestAddress: string | undefined;
+    if (this.config.tcpRequestPort) {
+      tcpRequestAddress = `tcp://0.0.0.0:${this.config.tcpRequestPort}`;
+      await this.requestChannel.bindAdditional(tcpRequestAddress);
+    }
+
     this.eventBus = new EventBus(this.socketFactory, this.logger.child('event-bus'));
     await this.eventBus.bind(provision.eventAddress);
 
@@ -290,15 +310,6 @@ export class Server {
         getActiveSessionCount: (group) =>
           sessionManager.getAll().filter((s) => s.group === group).length,
         spawnAgent: async (group, env) => {
-          // Read credentials for injection via stdin
-          let stdinData: string | undefined;
-          if (config.credentialsDir && credFs) {
-            const creds = readCredentialStdin(config.credentialsDir, credFs);
-            if (creds) {
-              stdinData = creds;
-            }
-          }
-
           // Ensure per-group claude-state directory exists before container mount
           const claudeStatePath = config.claudeStateDir
             ? join(config.claudeStateDir, group)
@@ -306,6 +317,24 @@ export class Server {
           if (claudeStatePath && pFs) {
             if (!pFs.existsSync(claudeStatePath)) {
               pFs.mkdirSync(claudeStatePath, { recursive: true });
+            }
+          }
+
+          // Credential injection strategy:
+          //   1. API key → stdin injection (existing path)
+          //   2. OAuth credentials JSON → copy into claude-state dir (file-based)
+          //   3. Neither → warn, no credentials
+          let stdinData: string | undefined;
+          if (config.credentialsDir && credFs) {
+            const apiKeyStdin = readCredentialStdin(config.credentialsDir, credFs);
+            if (apiKeyStdin) {
+              stdinData = apiKeyStdin;
+            } else if (claudeStatePath) {
+              // Try OAuth credentials file — copy into claude-state for bind mount
+              const oauthSourcePath = `${config.credentialsDir}/${OAUTH_CREDENTIALS_FILENAME}`;
+              if (credFs.existsSync(oauthSourcePath)) {
+                prepareOAuthCredentials(config.credentialsDir, claudeStatePath, credFs);
+              }
             }
           }
 
@@ -323,6 +352,7 @@ export class Server {
             stdinData,
             claudeStatePath,
             skillsDir: config.skillsDir,
+            tcpRequestAddress,
           });
           return managed.session.sessionId;
         },
