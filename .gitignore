@@ -7,3 +7,5 @@ coverage/
 .env.*
 .DS_Store
 bench-results.json
+plugins/
+.claude/worktrees/
