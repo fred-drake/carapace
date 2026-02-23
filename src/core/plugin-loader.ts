@@ -71,6 +71,7 @@ export class PluginLoader {
   private readonly eventBus: EventBus | undefined;
   private readonly logger: Logger;
   private readonly loadedHandlers: Map<string, PluginHandler> = new Map();
+  private readonly loadedManifests: Map<string, PluginManifest> = new Map();
   private readonly reservedPluginNames: Set<string> = new Set();
 
   constructor(opts: {
@@ -259,6 +260,7 @@ export class PluginLoader {
 
     // 4. Mark as loaded and reserved
     this.loadedHandlers.set(name, handler);
+    this.loadedManifests.set(name, manifest);
     this.reservedPluginNames.add(name);
 
     this.logger.info('built-in handler registered', {
@@ -438,6 +440,7 @@ export class PluginLoader {
     }
 
     this.loadedHandlers.set(pluginName, handler);
+    this.loadedManifests.set(pluginName, manifest);
 
     this.logger.info('plugin loaded', { pluginName, source, tools: toolNames });
     return { ok: true, pluginName, manifest, handler, source };
@@ -472,6 +475,105 @@ export class PluginLoader {
   }
 
   // -------------------------------------------------------------------------
+  // Unload / Reload
+  // -------------------------------------------------------------------------
+
+  /**
+   * Unload a single plugin by name.
+   *
+   * Shuts down the handler, unregisters its tools from the catalog, and
+   * removes it from internal tracking maps. Refuses to unload reserved
+   * (built-in) plugins.
+   *
+   * @returns `true` if the plugin was unloaded, `false` if not found or reserved.
+   */
+  async unloadPlugin(name: string): Promise<boolean> {
+    if (this.reservedPluginNames.has(name)) {
+      this.logger.warn('refused to unload reserved plugin', { pluginName: name });
+      return false;
+    }
+
+    const handler = this.loadedHandlers.get(name);
+    if (!handler) {
+      this.logger.debug('unload skipped — plugin not loaded', { pluginName: name });
+      return false;
+    }
+
+    // Shutdown handler
+    try {
+      await Promise.race([
+        handler.shutdown(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('shutdown timed out')), 5_000),
+        ),
+      ]);
+    } catch {
+      this.logger.warn('plugin shutdown failed during unload', { pluginName: name });
+    }
+
+    // Unregister tools from catalog
+    const manifest = this.loadedManifests.get(name);
+    if (manifest) {
+      for (const tool of manifest.provides.tools) {
+        this.toolCatalog.unregister(tool.name);
+      }
+    }
+
+    this.loadedHandlers.delete(name);
+    this.loadedManifests.delete(name);
+
+    this.logger.info('plugin unloaded', { pluginName: name });
+    return true;
+  }
+
+  /**
+   * Reload a single plugin by name.
+   *
+   * Unloads the plugin (if loaded), then re-discovers it from disk and
+   * re-loads it. Returns the load result or a failure if the plugin
+   * could not be found on disk.
+   */
+  async reloadPlugin(name: string): Promise<PluginLoadResult> {
+    await this.unloadPlugin(name);
+
+    // Re-discover to find the plugin's directory
+    const discovered = await this.discoverPlugins();
+    const match = discovered.find((p) => p.name === name);
+    if (!match) {
+      this.logger.warn('reload failed — plugin not found on disk', { pluginName: name });
+      return {
+        ok: false,
+        pluginName: name,
+        error: `Plugin "${name}" not found on disk`,
+        category: 'missing_handler',
+      };
+    }
+
+    return this.loadPlugin(match.dir, match.source);
+  }
+
+  /**
+   * Reload all non-reserved plugins.
+   *
+   * Unloads every non-reserved plugin, then calls `loadAll()` to
+   * re-discover and load everything from disk.
+   */
+  async reloadAll(): Promise<PluginLoadResult[]> {
+    this.logger.info('reloading all plugins');
+
+    // Unload all non-reserved plugins
+    const toUnload = [...this.loadedHandlers.keys()].filter(
+      (name) => !this.reservedPluginNames.has(name),
+    );
+    for (const name of toUnload) {
+      await this.unloadPlugin(name);
+    }
+
+    // Re-discover and load
+    return this.loadAll();
+  }
+
+  // -------------------------------------------------------------------------
   // Shutdown
   // -------------------------------------------------------------------------
 
@@ -502,6 +604,7 @@ export class PluginLoader {
     );
 
     this.loadedHandlers.clear();
+    this.loadedManifests.clear();
     this.logger.info('all plugins shut down');
   }
 

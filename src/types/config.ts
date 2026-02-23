@@ -156,6 +156,7 @@ export const CARAPACE_SUBDIRS = [
   'run',
   'run/sockets',
   'run/skills',
+  'run/reload',
 ] as const;
 
 /** Subdirectories that require restricted permissions (0700). */
@@ -176,6 +177,7 @@ const MUTABLE_SUBDIRS: ReadonlySet<string> = new Set([
   'run',
   'run/sockets',
   'run/skills',
+  'run/reload',
 ]);
 
 /** Result of `ensureDirectoryStructure()` with resolved paths. */

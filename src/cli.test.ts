@@ -9,6 +9,7 @@ import {
   uninstall,
   auth,
   prompt,
+  reload,
 } from './cli.js';
 import { MockContainerRuntime } from './core/container/mock-runtime.js';
 import type { CliDeps } from './cli.js';
@@ -944,5 +945,65 @@ describe('prompt', () => {
       (deps.writeFile as ReturnType<typeof vi.fn>).mock.calls[0][1] as string,
     );
     expect(content.payload.prompt).toBe('summarize my emails');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reload
+// ---------------------------------------------------------------------------
+
+describe('reload', () => {
+  it('dispatches to reload command via runCommand', async () => {
+    const deps = createTestDeps({
+      readPidFile: vi.fn().mockReturnValue(12345),
+      processExists: vi.fn().mockReturnValue(true),
+      ensureDir: vi.fn(),
+    });
+    const code = await runCommand('reload', deps, {}, '', {}, []);
+    expect(code).toBe(0);
+    expect(deps.stdout).toHaveBeenCalledWith(
+      expect.stringContaining('Reload requested for all plugins'),
+    );
+  });
+
+  it('shows reload in usage text', async () => {
+    const deps = createTestDeps();
+    await runCommand('', deps);
+    expect(deps.stdout).toHaveBeenCalledWith(expect.stringContaining('reload'));
+  });
+
+  it('passes plugin name positional to reload command', async () => {
+    const deps = createTestDeps({
+      readPidFile: vi.fn().mockReturnValue(12345),
+      processExists: vi.fn().mockReturnValue(true),
+      ensureDir: vi.fn(),
+    });
+    const code = await reload(deps, ['my-plugin']);
+    expect(code).toBe(0);
+    expect(deps.stdout).toHaveBeenCalledWith(
+      expect.stringContaining('Reload requested for plugin "my-plugin"'),
+    );
+  });
+
+  it('reloads all plugins when no positional given', async () => {
+    const deps = createTestDeps({
+      readPidFile: vi.fn().mockReturnValue(12345),
+      processExists: vi.fn().mockReturnValue(true),
+      ensureDir: vi.fn(),
+    });
+    const code = await reload(deps, []);
+    expect(code).toBe(0);
+    expect(deps.stdout).toHaveBeenCalledWith(
+      expect.stringContaining('Reload requested for all plugins'),
+    );
+  });
+
+  it('returns 1 when carapace is not running', async () => {
+    const deps = createTestDeps({
+      readPidFile: vi.fn().mockReturnValue(null),
+    });
+    const code = await reload(deps, []);
+    expect(code).toBe(1);
+    expect(deps.stderr).toHaveBeenCalledWith(expect.stringContaining('not running'));
   });
 });

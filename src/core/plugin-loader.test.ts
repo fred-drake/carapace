@@ -86,6 +86,22 @@ vi.mock('/plugins/tool-only-plugin/handler.js', () =>
 // Built-in plugin handler mocks
 vi.mock('/builtin/alpha/handler.js', () => importMocks.get('/builtin/alpha/handler.js')!());
 vi.mock('/builtin/beta/handler.js', () => importMocks.get('/builtin/beta/handler.js')!());
+// Unload / reload handler mocks
+vi.mock('/plugins/unload-test/handler.js', () =>
+  importMocks.get('/plugins/unload-test/handler.js')!(),
+);
+vi.mock('/plugins/unload-fail/handler.js', () =>
+  importMocks.get('/plugins/unload-fail/handler.js')!(),
+);
+vi.mock('/plugins/reload-test/handler.js', () =>
+  importMocks.get('/plugins/reload-test/handler.js')!(),
+);
+vi.mock('/plugins/reload-vanish/handler.js', () =>
+  importMocks.get('/plugins/reload-vanish/handler.js')!(),
+);
+vi.mock('/plugins/reload-all-test/handler.js', () =>
+  importMocks.get('/plugins/reload-all-test/handler.js')!(),
+);
 
 // ---------------------------------------------------------------------------
 // Setup / Teardown
@@ -1134,6 +1150,251 @@ describe('PluginLoader', () => {
       const log = logEntries.find((e) => e.msg === 'loading plugin');
       expect(log).toBeDefined();
       expect(log!.component).toBe('plugin-loader');
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // unloadPlugin
+  // -----------------------------------------------------------------------
+
+  describe('unloadPlugin', () => {
+    it('unloads a loaded plugin and removes its tools from catalog', async () => {
+      vi.useRealTimers();
+
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'unload_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      allowAccess(['/plugins/unload-test/manifest.json', '/plugins/unload-test/handler.js']);
+      importMocks.set('/plugins/unload-test/handler.js', () =>
+        Promise.resolve({ default: handler }),
+      );
+
+      const catalog = new ToolCatalog();
+      const loader = new PluginLoader({ toolCatalog: catalog, userPluginsDir: '/plugins' });
+      const loadResult = await loader.loadPlugin('/plugins/unload-test');
+
+      expect(loadResult.ok).toBe(true);
+      expect(catalog.has('unload_tool')).toBe(true);
+
+      const result = await loader.unloadPlugin('unload-test');
+
+      expect(result).toBe(true);
+      expect(handler.shutdown).toHaveBeenCalledTimes(1);
+      expect(catalog.has('unload_tool')).toBe(false);
+      expect(loader.getHandler('unload-test')).toBeUndefined();
+
+      vi.useFakeTimers();
+    });
+
+    it('returns false for a plugin that is not loaded', async () => {
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+
+      const result = await loader.unloadPlugin('nonexistent');
+      expect(result).toBe(false);
+    });
+
+    it('refuses to unload reserved plugins', async () => {
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'builtin_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+
+      const catalog = new ToolCatalog();
+      const loader = new PluginLoader({ toolCatalog: catalog, userPluginsDir: '/plugins' });
+      await loader.registerBuiltinHandler('reserved-plugin', handler, manifest);
+
+      const result = await loader.unloadPlugin('reserved-plugin');
+
+      expect(result).toBe(false);
+      expect(catalog.has('builtin_tool')).toBe(true);
+      expect(loader.getHandler('reserved-plugin')).toBe(handler);
+    });
+
+    it('handles handler shutdown failure gracefully', async () => {
+      vi.useRealTimers();
+
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'fail_shutdown_tool' })],
+        },
+      });
+      const handler = createMockHandler({
+        shutdown: vi.fn(async () => {
+          throw new Error('shutdown exploded');
+        }),
+      });
+
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      allowAccess(['/plugins/unload-fail/manifest.json', '/plugins/unload-fail/handler.js']);
+      importMocks.set('/plugins/unload-fail/handler.js', () =>
+        Promise.resolve({ default: handler }),
+      );
+
+      const catalog = new ToolCatalog();
+      const loader = new PluginLoader({ toolCatalog: catalog, userPluginsDir: '/plugins' });
+      await loader.loadPlugin('/plugins/unload-fail');
+
+      const result = await loader.unloadPlugin('unload-fail');
+
+      expect(result).toBe(true);
+      expect(catalog.has('fail_shutdown_tool')).toBe(false);
+
+      vi.useFakeTimers();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // reloadPlugin
+  // -----------------------------------------------------------------------
+
+  describe('reloadPlugin', () => {
+    it('unloads and re-loads a plugin from disk', async () => {
+      vi.useRealTimers();
+
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'reload_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+
+      mockReaddir.mockResolvedValue(['reload-test'] as unknown as Awaited<
+        ReturnType<typeof readdir>
+      >);
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      allowAccess(['/plugins/reload-test/manifest.json', '/plugins/reload-test/handler.js']);
+      importMocks.set('/plugins/reload-test/handler.js', () =>
+        Promise.resolve({ default: handler }),
+      );
+
+      const catalog = new ToolCatalog();
+      const loader = new PluginLoader({ toolCatalog: catalog, userPluginsDir: '/plugins' });
+      await loader.loadPlugin('/plugins/reload-test');
+
+      const result = await loader.reloadPlugin('reload-test');
+
+      expect(result.ok).toBe(true);
+      expect(result.pluginName).toBe('reload-test');
+      expect(catalog.has('reload_tool')).toBe(true);
+
+      vi.useFakeTimers();
+    });
+
+    it('returns failure when plugin is not found on disk', async () => {
+      vi.useRealTimers();
+
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'vanish_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      allowAccess(['/plugins/reload-vanish/manifest.json', '/plugins/reload-vanish/handler.js']);
+      importMocks.set('/plugins/reload-vanish/handler.js', () =>
+        Promise.resolve({ default: handler }),
+      );
+
+      const catalog = new ToolCatalog();
+      const loader = new PluginLoader({ toolCatalog: catalog, userPluginsDir: '/plugins' });
+      await loader.loadPlugin('/plugins/reload-vanish');
+
+      // Now readdir returns empty — plugin no longer on disk
+      mockReaddir.mockResolvedValue([] as unknown as Awaited<ReturnType<typeof readdir>>);
+
+      const result = await loader.reloadPlugin('reload-vanish');
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain('not found on disk');
+      }
+
+      vi.useFakeTimers();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // reloadAll
+  // -----------------------------------------------------------------------
+
+  describe('reloadAll', () => {
+    it('unloads non-reserved plugins and re-loads from disk', async () => {
+      vi.useRealTimers();
+
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'reload_all_tool' })],
+        },
+      });
+      const handler = createMockHandler();
+
+      mockReaddir.mockResolvedValue(['reload-all-test'] as unknown as Awaited<
+        ReturnType<typeof readdir>
+      >);
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      allowAccess([
+        '/plugins/reload-all-test/manifest.json',
+        '/plugins/reload-all-test/handler.js',
+      ]);
+      importMocks.set('/plugins/reload-all-test/handler.js', () =>
+        Promise.resolve({ default: handler }),
+      );
+
+      const catalog = new ToolCatalog();
+      const loader = new PluginLoader({ toolCatalog: catalog, userPluginsDir: '/plugins' });
+      await loader.loadAll();
+
+      const results = await loader.reloadAll();
+
+      expect(results).toHaveLength(1);
+      expect(results[0]!.ok).toBe(true);
+      expect(catalog.has('reload_all_tool')).toBe(true);
+
+      vi.useFakeTimers();
+    });
+
+    it('preserves reserved plugins during reload', async () => {
+      vi.useRealTimers();
+
+      const builtinManifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'builtin_preserved' })],
+        },
+      });
+      const builtinHandler = createMockHandler();
+
+      const catalog = new ToolCatalog();
+      const loader = new PluginLoader({ toolCatalog: catalog, userPluginsDir: '/plugins' });
+      await loader.registerBuiltinHandler('my-builtin', builtinHandler, builtinManifest);
+
+      // No user plugins on disk
+      mockReaddir.mockResolvedValue([] as unknown as Awaited<ReturnType<typeof readdir>>);
+
+      const results = await loader.reloadAll();
+
+      expect(results).toHaveLength(0); // No user plugins discovered
+      expect(catalog.has('builtin_preserved')).toBe(true); // Built-in still there
+      expect(loader.getHandler('my-builtin')).toBe(builtinHandler);
+
+      vi.useFakeTimers();
     });
   });
 });

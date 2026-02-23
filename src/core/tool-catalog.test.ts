@@ -78,6 +78,37 @@ describe('ToolCatalog', () => {
     });
   });
 
+  describe('unregister', () => {
+    it('removes a registered tool and returns true', () => {
+      const catalog = new ToolCatalog();
+      const tool = createToolDeclaration({ name: 'removable_tool' });
+      catalog.register(tool, noopHandler);
+
+      const result = catalog.unregister('removable_tool');
+
+      expect(result).toBe(true);
+      expect(catalog.has('removable_tool')).toBe(false);
+      expect(catalog.get('removable_tool')).toBeUndefined();
+    });
+
+    it('returns false for a tool that does not exist', () => {
+      const catalog = new ToolCatalog();
+
+      expect(catalog.unregister('nonexistent')).toBe(false);
+    });
+
+    it('allows re-registration after unregister', () => {
+      const catalog = new ToolCatalog();
+      const tool = createToolDeclaration({ name: 'reregister_tool' });
+      catalog.register(tool, noopHandler);
+      catalog.unregister('reregister_tool');
+
+      // Should not throw
+      catalog.register(tool, noopHandler);
+      expect(catalog.has('reregister_tool')).toBe(true);
+    });
+  });
+
   describe('get unknown', () => {
     it('returns undefined for an unregistered tool name', () => {
       const catalog = new ToolCatalog();
@@ -123,6 +154,27 @@ describe('ToolCatalog', () => {
       const regLog = logEntries.find((e) => e.msg === 'tool registered');
       expect(regLog).toBeDefined();
       expect(regLog!.component).toBe('tool-catalog');
+    });
+
+    it('logs tool unregistered on unregister()', () => {
+      const catalog = new ToolCatalog();
+      const tool = createToolDeclaration({ name: 'unreg_tool' });
+      catalog.register(tool, noopHandler);
+
+      catalog.unregister('unreg_tool');
+
+      const unregLog = logEntries.find((e) => e.msg === 'tool unregistered');
+      expect(unregLog).toBeDefined();
+      expect(unregLog!.meta?.toolName).toBe('unreg_tool');
+    });
+
+    it('does not log when unregistering a nonexistent tool', () => {
+      const catalog = new ToolCatalog();
+
+      catalog.unregister('ghost');
+
+      const unregLog = logEntries.find((e) => e.msg === 'tool unregistered');
+      expect(unregLog).toBeUndefined();
     });
   });
 });
