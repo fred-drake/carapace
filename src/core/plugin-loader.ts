@@ -662,20 +662,24 @@ export class PluginLoader {
   /**
    * Try to dynamically import handler.js or handler.ts from the plugin dir.
    * Looks for handler.js first, then handler.ts.
+   *
+   * Appends a cache-busting query parameter to the import URL so that
+   * Node.js ESM module cache does not serve stale code after a reload.
    */
   private async importHandler(pluginDir: string): Promise<PluginHandler> {
     const jsPath = join(pluginDir, 'handler.js');
     const tsPath = join(pluginDir, 'handler.ts');
+    const cacheBust = `?t=${Date.now()}`;
 
     let handlerModule: Record<string, unknown>;
 
     try {
       await access(jsPath);
-      handlerModule = (await import(jsPath)) as Record<string, unknown>;
+      handlerModule = (await import(jsPath + cacheBust)) as Record<string, unknown>;
     } catch {
       try {
         await access(tsPath);
-        handlerModule = (await import(tsPath)) as Record<string, unknown>;
+        handlerModule = (await import(tsPath + cacheBust)) as Record<string, unknown>;
       } catch {
         throw new Error('No handler.js or handler.ts found');
       }

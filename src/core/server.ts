@@ -619,6 +619,40 @@ export class Server {
   }
 
   /**
+   * Reload a single plugin by name and re-aggregate skills.
+   *
+   * Guarded against concurrent invocations (shared with reloadPlugins).
+   */
+  private async reloadSinglePlugin(pluginName: string): Promise<void> {
+    if (this.reloading) {
+      this.logger.warn('reload already in progress, skipping single-plugin reload', { pluginName });
+      return;
+    }
+    this.reloading = true;
+
+    try {
+      if (this.pluginLoader) {
+        const result = await this.pluginLoader.reloadPlugin(pluginName);
+        if (result.ok) {
+          this.output(`Plugin "${pluginName}" reloaded successfully`);
+        } else {
+          this.output(`Plugin "${pluginName}" reload failed: ${result.error}`);
+        }
+      }
+
+      if (this.skillLoader) {
+        await this.skillLoader.aggregateSkills();
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.warn('single-plugin reload failed', { pluginName, error: message });
+      this.output(`Plugin "${pluginName}" reload error: ${message}`);
+    } finally {
+      this.reloading = false;
+    }
+  }
+
+  /**
    * Start polling a directory for CLI-submitted reload trigger files.
    *
    * Files are JSON-serialized reload triggers written by `carapace reload`.
@@ -657,27 +691,22 @@ export class Server {
     for (const entry of entries) {
       if (!entry.endsWith('.json')) continue;
 
-      const filePath = `${reloadDir}/${entry}`;
+      const filePath = join(reloadDir, entry);
       try {
         const content = fs.readFileSync(filePath, 'utf-8');
         const trigger = JSON.parse(content) as { id?: string; plugin?: string | null };
         this.output(`Processing reload trigger: ${entry}`);
 
         if (trigger.plugin) {
-          // Single plugin reload
-          void (async () => {
-            if (this.pluginLoader) {
-              const result = await this.pluginLoader.reloadPlugin(trigger.plugin!);
-              if (result.ok) {
-                this.output(`Plugin "${trigger.plugin}" reloaded successfully`);
-              } else {
-                this.output(`Plugin "${trigger.plugin}" reload failed: ${result.error}`);
-              }
-            }
-            if (this.skillLoader) {
-              await this.skillLoader.aggregateSkills();
-            }
-          })();
+          // Validate plugin name — reject path traversal
+          const pluginName = trigger.plugin;
+          if (pluginName.includes('/') || pluginName.includes('..') || pluginName.includes('\0')) {
+            this.logger.warn('reload trigger rejected — invalid plugin name', { pluginName });
+            this.output(`Reload rejected: invalid plugin name "${pluginName}"`);
+          } else {
+            // Single plugin reload — use concurrency guard
+            void this.reloadSinglePlugin(pluginName);
+          }
         } else {
           // Full reload
           void this.reloadPlugins();
@@ -709,7 +738,7 @@ export class Server {
     for (const entry of entries) {
       if (!entry.endsWith('.json')) continue;
 
-      const filePath = `${promptsDir}/${entry}`;
+      const filePath = join(promptsDir, entry);
       try {
         const content = fs.readFileSync(filePath, 'utf-8');
         const envelope = JSON.parse(content) as EventEnvelope;
