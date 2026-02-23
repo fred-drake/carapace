@@ -139,6 +139,26 @@ describe('ContainerLifecycleManager', () => {
       expect(callOptions.env['MY_VAR']).toBe('hello');
     });
 
+    it('injects CARAPACE_CONNECTION_IDENTITY env var', async () => {
+      const runSpy = vi.spyOn(runtime, 'run');
+
+      await manager.spawn(defaultSpawnRequest({ group: 'email' }));
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.env['CARAPACE_CONNECTION_IDENTITY']).toBeDefined();
+      expect(callOptions.env['CARAPACE_CONNECTION_IDENTITY']).toMatch(/^carapace-email-/);
+    });
+
+    it('stores hex-encoded connectionIdentity in session', async () => {
+      const result = await manager.spawn(defaultSpawnRequest({ group: 'email' }));
+
+      // connectionIdentity should be a hex string
+      expect(result.session.connectionIdentity).toMatch(/^[0-9a-f]+$/);
+      // Decoding it should give a carapace-email-* string
+      const decoded = Buffer.from(result.session.connectionIdentity, 'hex').toString();
+      expect(decoded).toMatch(/^carapace-email-/);
+    });
+
     it('passes stdinData through to container run options', async () => {
       const runSpy = vi.spyOn(runtime, 'run');
 
@@ -688,7 +708,7 @@ describe('ContainerLifecycleManager', () => {
 
       const callOptions = runSpy.mock.calls[0][0];
       const claudeVolume = callOptions.volumes.find(
-        (v: { target: string }) => v.target === '/.claude',
+        (v: { target: string }) => v.target === '/home/node/.claude',
       );
       expect(claudeVolume).toBeDefined();
       expect(claudeVolume!.source).toBe('/data/claude-state/email/');
@@ -702,7 +722,7 @@ describe('ContainerLifecycleManager', () => {
 
       const callOptions = runSpy.mock.calls[0][0];
       const claudeVolume = callOptions.volumes.find(
-        (v: { target: string }) => v.target === '/.claude',
+        (v: { target: string }) => v.target === '/home/node/.claude',
       );
       expect(claudeVolume).toBeUndefined();
     });
@@ -727,10 +747,10 @@ describe('ContainerLifecycleManager', () => {
       const slackOptions = runSpy.mock.calls[1][0];
 
       const emailVolume = emailOptions.volumes.find(
-        (v: { target: string }) => v.target === '/.claude',
+        (v: { target: string }) => v.target === '/home/node/.claude',
       );
       const slackVolume = slackOptions.volumes.find(
-        (v: { target: string }) => v.target === '/.claude',
+        (v: { target: string }) => v.target === '/home/node/.claude',
       );
 
       expect(emailVolume!.source).toBe('/data/claude-state/email/');
@@ -751,7 +771,7 @@ describe('ContainerLifecycleManager', () => {
 
       const callOptions = runSpy.mock.calls[0][0];
       const skillsVolume = callOptions.volumes.find(
-        (v: { target: string }) => v.target === '/skills',
+        (v: { target: string }) => v.target === '/home/node/.claude/skills',
       );
       expect(skillsVolume).toBeDefined();
       expect(skillsVolume!.source).toBe('/home/.carapace/run/skills');
@@ -765,7 +785,7 @@ describe('ContainerLifecycleManager', () => {
 
       const callOptions = runSpy.mock.calls[0][0];
       const skillsVolume = callOptions.volumes.find(
-        (v: { target: string }) => v.target === '/skills',
+        (v: { target: string }) => v.target === '/home/node/.claude/skills',
       );
       expect(skillsVolume).toBeUndefined();
     });
