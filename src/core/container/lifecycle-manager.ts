@@ -81,6 +81,15 @@ export interface SpawnRequest {
    * (built-in + user). Set to `$CARAPACE_HOME/run/skills/` by the server.
    */
   skillsDir?: string;
+  /**
+   * TCP address for the request channel on the host.
+   *
+   * When set, the container uses TCP instead of IPC to communicate with
+   * the host's ROUTER socket. Required for Apple Containers where Unix
+   * domain sockets don't cross the VM boundary. The address should be
+   * the host-reachable form (e.g. `tcp://192.168.64.1:5560`).
+   */
+  tcpRequestAddress?: string;
 }
 
 /** A container managed by the lifecycle manager. */
@@ -151,20 +160,38 @@ export class ContainerLifecycleManager {
     // cover all paths Claude Code needs.
     const useReadOnly = this.runtime.name !== 'apple-container';
 
+    // Apple Containers run full VMs with separate Linux kernels — Unix domain
+    // sockets (IPC) don't cross the VM boundary. Use TCP transport instead.
+    // For Docker/Podman, keep the existing IPC socket mount.
+    const volumes = this.buildVolumes(request);
+    let socketMounts: ContainerRunOptions['socketMounts'] = [];
+    const env: Record<string, string> = {
+      ...request.env,
+      CARAPACE_CONNECTION_IDENTITY: rawIdentity,
+    };
+
+    if (this.runtime.name === 'apple-container' && request.tcpRequestAddress) {
+      // TCP transport: container connects to host via the VM's gateway address.
+      // Rewrite the bind address (0.0.0.0) to the host-reachable gateway IP.
+      env['CARAPACE_SOCKET'] = request.tcpRequestAddress.replace('0.0.0.0', '192.168.64.1');
+    } else {
+      socketMounts = [
+        {
+          hostPath: request.socketPath,
+          containerPath: CONTAINER_SOCKET_PATH,
+        },
+      ];
+    }
+
     const runOptions: ContainerRunOptions = {
       image: request.image,
       name: containerName,
       readOnly: useReadOnly,
       networkDisabled: !this.networkName,
       network: this.networkName,
-      volumes: this.buildVolumes(request),
-      socketMounts: [
-        {
-          hostPath: request.socketPath,
-          containerPath: CONTAINER_SOCKET_PATH,
-        },
-      ],
-      env: { ...request.env, CARAPACE_CONNECTION_IDENTITY: rawIdentity },
+      volumes,
+      socketMounts,
+      env,
       stdinData: request.stdinData,
     };
 

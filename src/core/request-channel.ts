@@ -105,6 +105,26 @@ export class RequestChannel {
   }
 
   /**
+   * Bind the existing ROUTER socket to an additional transport address.
+   *
+   * ZeroMQ sockets support binding to multiple addresses simultaneously.
+   * This is used to add a TCP endpoint alongside the primary IPC binding
+   * (e.g. for Apple Containers where Unix domain sockets don't cross the
+   * VM boundary).
+   *
+   * @param address - Transport address (e.g. "tcp://0.0.0.0:5560").
+   * @throws If the channel has not been bound yet.
+   */
+  async bindAdditional(address: string): Promise<void> {
+    if (!this.socket) {
+      throw new Error('RequestChannel is not bound — call bind() first');
+    }
+
+    await this.socket.bind(address);
+    this.logger.info('ROUTER socket bound (additional)', { address });
+  }
+
+  /**
    * Register a handler for incoming requests from DEALERs.
    *
    * Only one handler may be registered at a time; subsequent calls replace

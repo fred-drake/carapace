@@ -790,4 +790,60 @@ describe('ContainerLifecycleManager', () => {
       expect(skillsVolume).toBeUndefined();
     });
   });
+
+  // -----------------------------------------------------------------------
+  // Apple Container TCP transport
+  // -----------------------------------------------------------------------
+
+  describe('Apple Container TCP transport', () => {
+    let appleRuntime: MockContainerRuntime;
+    let appleManager: ContainerLifecycleManager;
+
+    beforeEach(() => {
+      appleRuntime = new MockContainerRuntime('apple-container');
+      appleManager = new ContainerLifecycleManager({
+        runtime: appleRuntime,
+        sessionManager,
+        shutdownTimeoutMs: 500,
+        networkName: 'default',
+      });
+    });
+
+    it('sets CARAPACE_SOCKET to TCP address with gateway IP for apple-container', async () => {
+      const runSpy = vi.spyOn(appleRuntime, 'run');
+
+      await appleManager.spawn(defaultSpawnRequest({ tcpRequestAddress: 'tcp://0.0.0.0:5560' }));
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.env['CARAPACE_SOCKET']).toBe('tcp://192.168.64.1:5560');
+    });
+
+    it('does not mount socket when using TCP transport', async () => {
+      const runSpy = vi.spyOn(appleRuntime, 'run');
+
+      await appleManager.spawn(defaultSpawnRequest({ tcpRequestAddress: 'tcp://0.0.0.0:5560' }));
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.socketMounts).toHaveLength(0);
+    });
+
+    it('falls back to IPC socket mount when tcpRequestAddress is not provided', async () => {
+      const runSpy = vi.spyOn(appleRuntime, 'run');
+
+      await appleManager.spawn(defaultSpawnRequest());
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.socketMounts).toHaveLength(1);
+      expect(callOptions.socketMounts[0].hostPath).toBe('/tmp/sockets/test.sock');
+    });
+
+    it('disables readOnly for apple-container', async () => {
+      const runSpy = vi.spyOn(appleRuntime, 'run');
+
+      await appleManager.spawn(defaultSpawnRequest());
+
+      const callOptions = runSpy.mock.calls[0][0];
+      expect(callOptions.readOnly).toBe(false);
+    });
+  });
 });

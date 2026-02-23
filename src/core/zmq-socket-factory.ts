@@ -136,7 +136,23 @@ class ZmqRouterSocket implements RouterSocket {
 
     void (async () => {
       try {
-        for await (const [identity, delimiter, payload] of this.socket) {
+        for await (const frames of this.socket) {
+          // DEALER sends [delimiter, payload] → ROUTER sees [identity, delimiter, payload] (3 frames).
+          // Some DEALER implementations omit the delimiter → ROUTER sees [identity, payload] (2 frames).
+          // Handle both for robustness.
+          let identity: Buffer;
+          let delimiter: Buffer;
+          let payload: Buffer;
+
+          if (frames.length >= 3) {
+            [identity, delimiter, payload] = frames;
+          } else if (frames.length === 2) {
+            [identity, payload] = frames;
+            delimiter = Buffer.alloc(0);
+          } else {
+            continue; // Malformed — skip
+          }
+
           for (const handler of this.handlers) {
             handler(identity, delimiter, payload);
           }
@@ -186,7 +202,11 @@ class ZmqDealerSocket implements DealerSocket {
 
     void (async () => {
       try {
-        for await (const [payload] of this.socket) {
+        for await (const frames of this.socket) {
+          // ROUTER sends [identity, delimiter, payload]; DEALER receives
+          // [delimiter, payload] (identity stripped). Take the last frame
+          // as the actual payload.
+          const payload = Buffer.from(frames[frames.length - 1]);
           for (const handler of this.handlers) {
             handler(payload);
           }

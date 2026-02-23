@@ -10,6 +10,7 @@ function createDeps(overrides?: Partial<AuthDeps>): AuthDeps {
     stdout: vi.fn(),
     stderr: vi.fn(),
     home: '/home/user/.carapace',
+    userHome: '/home/user',
     promptSecret: vi.fn().mockResolvedValue('sk-ant-api03-validkey1234567890'),
     promptString: vi.fn().mockResolvedValue('oauth-token-value'),
     validateApiKey: vi.fn().mockResolvedValue({ valid: true }),
@@ -101,47 +102,86 @@ describe('runAuthApiKey', () => {
 // ---------------------------------------------------------------------------
 
 describe('runAuthLogin', () => {
-  it('shows OAuth setup instructions', async () => {
-    const deps = createDeps();
-    await runAuthLogin(deps);
-    const allCalls = (deps.stdout as ReturnType<typeof vi.fn>).mock.calls.flat();
-    const hasInstructions = allCalls.some((c: string) => /claude|oauth|token/i.test(c));
-    expect(hasInstructions).toBe(true);
-  });
+  it('copies credentials from ~/.claude/.credentials.json', async () => {
+    const credContent = '{"accessToken":"abc","refreshToken":"xyz"}';
+    const deps = createDeps({
+      fileExists: vi
+        .fn()
+        .mockImplementation((p: string) => p.includes('.claude/.credentials.json')),
+      readFile: vi.fn().mockReturnValue(credContent),
+    });
 
-  it('prompts for the token', async () => {
-    const deps = createDeps();
-    await runAuthLogin(deps);
-    expect(deps.promptString).toHaveBeenCalled();
-  });
-
-  it('stores token with 0600 permissions', async () => {
-    const deps = createDeps();
     const code = await runAuthLogin(deps);
+
     expect(code).toBe(0);
     expect(deps.writeFileSecure).toHaveBeenCalledWith(
-      '/home/user/.carapace/credentials/claude-oauth-token',
-      'oauth-token-value',
+      '/home/user/.carapace/credentials/claude-credentials.json',
+      credContent,
       0o600,
     );
   });
 
-  it('rejects empty token', async () => {
+  it('reads from the correct source path', async () => {
     const deps = createDeps({
-      promptString: vi.fn().mockResolvedValue(''),
+      fileExists: vi.fn().mockReturnValue(true),
+      readFile: vi.fn().mockReturnValue('{"accessToken":"test"}'),
     });
+
+    await runAuthLogin(deps);
+
+    expect(deps.fileExists).toHaveBeenCalledWith('/home/user/.claude/.credentials.json');
+  });
+
+  it('fails when source credentials file does not exist', async () => {
+    const deps = createDeps({
+      fileExists: vi.fn().mockReturnValue(false),
+    });
+
     const code = await runAuthLogin(deps);
+
+    expect(code).toBe(1);
+    expect(deps.writeFileSecure).not.toHaveBeenCalled();
+    const allStderr = (deps.stderr as ReturnType<typeof vi.fn>).mock.calls.flat();
+    const hasGuidance = allStderr.some((c: string) => /claude login/i.test(c));
+    expect(hasGuidance).toBe(true);
+  });
+
+  it('fails when source credentials file is empty', async () => {
+    const deps = createDeps({
+      fileExists: vi.fn().mockReturnValue(true),
+      readFile: vi.fn().mockReturnValue(''),
+    });
+
+    const code = await runAuthLogin(deps);
+
     expect(code).toBe(1);
     expect(deps.writeFileSecure).not.toHaveBeenCalled();
   });
 
   it('reports success after storing', async () => {
-    const deps = createDeps();
+    const deps = createDeps({
+      fileExists: vi.fn().mockReturnValue(true),
+      readFile: vi.fn().mockReturnValue('{"accessToken":"abc"}'),
+    });
+
     const code = await runAuthLogin(deps);
+
     expect(code).toBe(0);
     const allCalls = (deps.stdout as ReturnType<typeof vi.fn>).mock.calls.flat();
-    const hasSuccess = allCalls.some((c: string) => /stored|saved|configured/i.test(c));
+    const hasSuccess = allCalls.some((c: string) => /imported|configured|stored/i.test(c));
     expect(hasSuccess).toBe(true);
+  });
+
+  it('does not prompt for user input', async () => {
+    const deps = createDeps({
+      fileExists: vi.fn().mockReturnValue(true),
+      readFile: vi.fn().mockReturnValue('{"accessToken":"abc"}'),
+    });
+
+    await runAuthLogin(deps);
+
+    expect(deps.promptString).not.toHaveBeenCalled();
+    expect(deps.promptSecret).not.toHaveBeenCalled();
   });
 });
 
@@ -174,16 +214,29 @@ describe('runAuthStatus', () => {
     expect(hasApiKey).toBe(true);
   });
 
-  it('shows OAuth token status when configured', async () => {
+  it('shows OAuth credentials status when configured', async () => {
+    const deps = createDeps({
+      fileExists: vi.fn().mockImplementation((p: string) => p.includes('claude-credentials.json')),
+      readFile: vi.fn().mockReturnValue('{"accessToken":"abc"}'),
+      fileStat: vi.fn().mockReturnValue({ mtime: new Date('2026-02-15T10:00:00Z') }),
+    });
+    const code = await runAuthStatus(deps);
+    expect(code).toBe(0);
+    const allCalls = (deps.stdout as ReturnType<typeof vi.fn>).mock.calls.flat();
+    const hasOAuth = allCalls.some((c: string) => /oauth|credential/i.test(c));
+    expect(hasOAuth).toBe(true);
+  });
+
+  it('warns about legacy OAuth token file', async () => {
     const deps = createDeps({
       fileExists: vi.fn().mockImplementation((p: string) => p.includes('claude-oauth-token')),
       fileStat: vi.fn().mockReturnValue({ mtime: new Date('2026-02-15T10:00:00Z') }),
     });
     const code = await runAuthStatus(deps);
     expect(code).toBe(0);
-    const allCalls = (deps.stdout as ReturnType<typeof vi.fn>).mock.calls.flat();
-    const hasOAuth = allCalls.some((c: string) => /oauth|token/i.test(c));
-    expect(hasOAuth).toBe(true);
+    const allStderr = (deps.stderr as ReturnType<typeof vi.fn>).mock.calls.flat();
+    const hasWarning = allStderr.some((c: string) => /legacy|migrate/i.test(c));
+    expect(hasWarning).toBe(true);
   });
 
   it('never prints actual credential values', async () => {
@@ -234,6 +287,32 @@ describe('runAuthStatus', () => {
     const allCalls = (deps.stdout as ReturnType<typeof vi.fn>).mock.calls.flat().join(' ');
     expect(allCalls).toMatch(/2026-02-15/);
   });
+
+  it('shows expiry info when expiresAt is in credentials JSON', async () => {
+    const futureDate = new Date(Date.now() + 4 * 3_600_000).toISOString();
+    const credContent = JSON.stringify({ accessToken: 'abc', expiresAt: futureDate });
+    const deps = createDeps({
+      fileExists: vi.fn().mockImplementation((p: string) => p.includes('claude-credentials.json')),
+      readFile: vi.fn().mockReturnValue(credContent),
+      fileStat: vi.fn().mockReturnValue({ mtime: new Date('2026-02-15T10:00:00Z') }),
+    });
+    await runAuthStatus(deps);
+    const allCalls = (deps.stdout as ReturnType<typeof vi.fn>).mock.calls.flat().join(' ');
+    expect(allCalls).toMatch(/expires in/);
+  });
+
+  it('shows expired warning when expiresAt is in the past', async () => {
+    const pastDate = new Date(Date.now() - 3_600_000).toISOString();
+    const credContent = JSON.stringify({ accessToken: 'abc', expiresAt: pastDate });
+    const deps = createDeps({
+      fileExists: vi.fn().mockImplementation((p: string) => p.includes('claude-credentials.json')),
+      readFile: vi.fn().mockReturnValue(credContent),
+      fileStat: vi.fn().mockReturnValue({ mtime: new Date('2026-02-15T10:00:00Z') }),
+    });
+    await runAuthStatus(deps);
+    const allCalls = (deps.stdout as ReturnType<typeof vi.fn>).mock.calls.flat().join(' ');
+    expect(allCalls).toMatch(/expired/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -251,11 +330,14 @@ describe('file permissions', () => {
     );
   });
 
-  it('oauth token stored at credentials/claude-oauth-token', async () => {
-    const deps = createDeps();
+  it('oauth credentials stored at credentials/claude-credentials.json', async () => {
+    const deps = createDeps({
+      fileExists: vi.fn().mockReturnValue(true),
+      readFile: vi.fn().mockReturnValue('{"accessToken":"abc"}'),
+    });
     await runAuthLogin(deps);
     expect(deps.writeFileSecure).toHaveBeenCalledWith(
-      expect.stringContaining('credentials/claude-oauth-token'),
+      expect.stringContaining('credentials/claude-credentials.json'),
       expect.any(String),
       0o600,
     );

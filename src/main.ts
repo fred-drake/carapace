@@ -21,6 +21,7 @@ import {
   statSync,
   rmSync,
   accessSync,
+  renameSync,
   constants as fsConstants,
 } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -175,6 +176,9 @@ async function confirm(prompt: string): Promise<boolean> {
 // Server factory for start command
 // ---------------------------------------------------------------------------
 
+/** Default TCP port for the ZeroMQ request channel (Apple Containers). */
+const TCP_REQUEST_PORT = 5560;
+
 function createStartServer(
   home: string,
   containerRuntime?: ContainerRuntime,
@@ -204,6 +208,8 @@ function createStartServer(
     sessionDbPath: join(home, 'data', 'claude-sessions.sqlite'),
     networkName: 'default',
     skillsDir,
+    // Apple Containers need TCP transport (IPC sockets don't cross VM boundary)
+    tcpRequestPort: containerRuntime?.name === 'apple-container' ? TCP_REQUEST_PORT : undefined,
   };
 
   // Reserved plugin names — built-in plugins that cannot be overridden
@@ -256,6 +262,8 @@ function createStartServer(
     credentialFs: {
       existsSync: (path: string) => existsSync(path),
       readFileSync: (path: string) => readFileSync(path, 'utf-8'),
+      writeFileSync: (p: string, d: string, opts: { mode: number }) => writeFileSync(p, d, opts),
+      renameSync: (o: string, n: string) => renameSync(o, n),
     },
     builtinHandlers: [
       { name: 'installer', handler: installerHandler, manifest: installerManifest },

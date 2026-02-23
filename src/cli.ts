@@ -500,6 +500,7 @@ export async function auth(deps: CliDeps, subcommand: string): Promise<number> {
     stdout: deps.stdout,
     stderr: deps.stderr,
     home: deps.home,
+    userHome: deps.userHome,
     promptSecret: deps.promptSecret,
     promptString: deps.promptString,
     validateApiKey: deps.validateApiKey,

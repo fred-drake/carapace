@@ -127,6 +127,8 @@ function createWiredServer(overrides?: {
               if (path in files) return files[path];
               throw new Error(`ENOENT: ${path}`);
             },
+            writeFileSync: vi.fn(),
+            renameSync: vi.fn(),
           }
         : undefined,
     },
@@ -397,12 +399,12 @@ describe('Server event-to-spawn wiring (integration)', () => {
     });
   });
 
-  it('spawned container receives stdinData when OAuth token is configured', async () => {
+  it('spawned container has no stdinData when only OAuth credentials are configured', async () => {
     const credsDir = '/tmp/carapace-test-creds';
     ctx = createWiredServer({
       credentialsDir: credsDir,
       credentialFiles: {
-        [`${credsDir}/claude-oauth-token`]: 'oauth-abc-123',
+        [`${credsDir}/claude-credentials.json`]: '{"accessToken":"abc","refreshToken":"xyz"}',
       },
     });
     await ctx.server.start();
@@ -413,7 +415,8 @@ describe('Server event-to-spawn wiring (integration)', () => {
     await vi.waitFor(() => {
       const runCall = (ctx.runtime.run as ReturnType<typeof vi.fn>).mock
         .calls[0][0] as import('./container/runtime.js').ContainerRunOptions;
-      expect(runCall.stdinData).toBe('CLAUDE_CODE_OAUTH_TOKEN=oauth-abc-123\n\n');
+      // OAuth credentials are copied to claude-state dir, not injected via stdin
+      expect(runCall.stdinData).toBeUndefined();
     });
   });
 
