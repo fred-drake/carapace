@@ -24,6 +24,7 @@ import { createIpcLogger } from './ipc-logger.js';
 
 const SOCKET_PATH = process.env['CARAPACE_SOCKET'] ?? 'ipc:///run/carapace.sock';
 const TIMEOUT_MS = parseInt(process.env['CARAPACE_TIMEOUT'] ?? '35000', 10);
+const CONNECTION_IDENTITY = process.env['CARAPACE_CONNECTION_IDENTITY'];
 const logger = createIpcLogger('ipc');
 
 // ---------------------------------------------------------------------------
@@ -36,8 +37,11 @@ class ZmqDealerAdapter implements DealerSocket {
   private handlers: DealerMessageHandler[] = [];
   private listening = false;
 
-  constructor() {
+  constructor(routingId?: string) {
     this.zmqDealer = new Dealer();
+    if (routingId) {
+      this.zmqDealer.routingId = routingId;
+    }
   }
 
   async connect(address: string): Promise<void> {
@@ -103,9 +107,9 @@ async function main(): Promise<void> {
     timeout_ms: TIMEOUT_MS,
   });
 
-  const dealer = new ZmqDealerAdapter();
+  const dealer = new ZmqDealerAdapter(CONNECTION_IDENTITY);
   await dealer.connect(SOCKET_PATH);
-  logger.debug('dealer connected', { socket: SOCKET_PATH });
+  logger.debug('dealer connected', { socket: SOCKET_PATH, hasRoutingId: !!CONNECTION_IDENTITY });
 
   const client = new IpcClient(dealer, { timeoutMs: TIMEOUT_MS });
 

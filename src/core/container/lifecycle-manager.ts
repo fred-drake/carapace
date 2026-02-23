@@ -68,17 +68,17 @@ export interface SpawnRequest {
   /**
    * Host-side path for per-group Claude Code state directory.
    *
-   * Mounted as `/.claude` inside the container. Each group gets its own
-   * isolated directory (e.g. `$CARAPACE_HOME/data/claude-state/{group}/`)
+   * Mounted as `/home/node/.claude` inside the container. Each group gets
+   * its own isolated directory (e.g. `$CARAPACE_HOME/data/claude-state/{group}/`)
    * to prevent cross-group session data leakage (security P0).
    */
   claudeStatePath?: string;
   /**
    * Host-side path to the aggregated skills directory.
    *
-   * Mounted as read-only at `/skills` inside the container. Contains
-   * namespaced skill files from all plugins (built-in + user).
-   * Set to `$CARAPACE_HOME/run/skills/` by the server.
+   * Mounted as read-only at `/home/node/.claude/skills` inside the
+   * container. Contains namespaced skill files from all plugins
+   * (built-in + user). Set to `$CARAPACE_HOME/run/skills/` by the server.
    */
   skillsDir?: string;
 }
@@ -96,7 +96,7 @@ export interface ManagedContainer {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10_000;
-const CONTAINER_SOCKET_PATH = '/sockets/carapace.sock';
+const CONTAINER_SOCKET_PATH = '/run/carapace.sock';
 
 // ---------------------------------------------------------------------------
 // ContainerLifecycleManager
@@ -135,7 +135,8 @@ export class ContainerLifecycleManager {
    * no network access, and the ZeroMQ socket mounted in.
    */
   async spawn(request: SpawnRequest): Promise<ManagedContainer> {
-    const connectionIdentity = `carapace-${request.group}-${crypto.randomUUID()}`;
+    const rawIdentity = `carapace-${request.group}-${crypto.randomUUID()}`;
+    const connectionIdentity = Buffer.from(rawIdentity).toString('hex');
     const containerName = `carapace-${request.group}-${crypto.randomUUID().slice(0, 8)}`;
 
     this.logger.info('spawning container', {
@@ -163,7 +164,7 @@ export class ContainerLifecycleManager {
           containerPath: CONTAINER_SOCKET_PATH,
         },
       ],
-      env: { ...request.env },
+      env: { ...request.env, CARAPACE_CONNECTION_IDENTITY: rawIdentity },
       stdinData: request.stdinData,
     };
 
@@ -345,7 +346,7 @@ export class ContainerLifecycleManager {
     if (request.claudeStatePath) {
       volumes.push({
         source: request.claudeStatePath,
-        target: '/.claude',
+        target: '/home/node/.claude',
         readonly: false,
       });
     }
@@ -353,7 +354,7 @@ export class ContainerLifecycleManager {
     if (request.skillsDir) {
       volumes.push({
         source: request.skillsDir,
-        target: '/skills',
+        target: '/home/node/.claude/skills',
         readonly: true,
       });
     }

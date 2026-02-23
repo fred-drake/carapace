@@ -82,13 +82,13 @@ describe('container lifecycle (e2e)', () => {
       expect(options.networkDisabled).toBe(true);
     });
 
-    it('mounts ZeroMQ socket at /sockets/carapace.sock', async () => {
+    it('mounts ZeroMQ socket at /run/carapace.sock', async () => {
       const runSpy = vi.spyOn(runtime, 'run');
       await manager.spawn(spawnRequest({ socketPath: '/host/path/zmq.sock' }));
 
       const options = runSpy.mock.calls[0]![0]!;
       expect(options.socketMounts).toEqual([
-        { hostPath: '/host/path/zmq.sock', containerPath: '/sockets/carapace.sock' },
+        { hostPath: '/host/path/zmq.sock', containerPath: '/run/carapace.sock' },
       ]);
     });
 
@@ -139,7 +139,10 @@ describe('container lifecycle (e2e)', () => {
       await manager.spawn(spawnRequest({ env: { API_KEY: 'test-key', NODE_ENV: 'production' } }));
 
       const options = runSpy.mock.calls[0]![0]!;
-      expect(options.env).toEqual({ API_KEY: 'test-key', NODE_ENV: 'production' });
+      expect(options.env['API_KEY']).toBe('test-key');
+      expect(options.env['NODE_ENV']).toBe('production');
+      // CARAPACE_CONNECTION_IDENTITY is always injected
+      expect(options.env['CARAPACE_CONNECTION_IDENTITY']).toBeDefined();
     });
   });
 
@@ -179,9 +182,13 @@ describe('container lifecycle (e2e)', () => {
       expect(ctx!.startedAt).toBeDefined();
     });
 
-    it('connection identity follows expected naming pattern', async () => {
+    it('connection identity is hex-encoded and decodes to expected naming pattern', async () => {
       const managed = await manager.spawn(spawnRequest({ group: 'email' }));
-      expect(managed.session.connectionIdentity).toMatch(/^carapace-email-/);
+      // connectionIdentity is stored as hex
+      expect(managed.session.connectionIdentity).toMatch(/^[0-9a-f]+$/);
+      // Decoding the hex gives the raw carapace-{group}-{uuid} string
+      const decoded = Buffer.from(managed.session.connectionIdentity, 'hex').toString();
+      expect(decoded).toMatch(/^carapace-email-/);
     });
 
     it('multiple sessions maintain separate reverse indexes', async () => {

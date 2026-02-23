@@ -736,7 +736,7 @@ describe('Server', () => {
             volumes: expect.arrayContaining([
               expect.objectContaining({
                 source: '/tmp/claude-state/email',
-                target: '/.claude',
+                target: '/home/node/.claude',
               }),
             ]),
           }),
@@ -774,7 +774,7 @@ describe('Server', () => {
       // Without claudeStateDir, volumes should not include .claude mount
       const runCall = (ctx.runtime.run as ReturnType<typeof vi.fn>).mock.calls[0][0];
       const claudeVolume = runCall.volumes?.find(
-        (v: { target: string }) => v.target === '/.claude',
+        (v: { target: string }) => v.target === '/home/node/.claude',
       );
       expect(claudeVolume).toBeUndefined();
     });

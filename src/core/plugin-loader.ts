@@ -673,14 +673,40 @@ export class PluginLoader {
 
     let handlerModule: Record<string, unknown>;
 
+    // Check handler.js first
+    let jsExists = false;
     try {
       await access(jsPath);
-      handlerModule = (await import(jsPath + cacheBust)) as Record<string, unknown>;
+      jsExists = true;
     } catch {
+      // handler.js does not exist
+    }
+
+    if (jsExists) {
+      try {
+        handlerModule = (await import(jsPath + cacheBust)) as Record<string, unknown>;
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(`handler.js exists but failed to import: ${message}`);
+      }
+    } else {
+      // Fall back to handler.ts
+      let tsExists = false;
       try {
         await access(tsPath);
-        handlerModule = (await import(tsPath + cacheBust)) as Record<string, unknown>;
+        tsExists = true;
       } catch {
+        // handler.ts does not exist
+      }
+
+      if (tsExists) {
+        try {
+          handlerModule = (await import(tsPath + cacheBust)) as Record<string, unknown>;
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          throw new Error(`handler.ts exists but failed to import: ${message}`);
+        }
+      } else {
         throw new Error('No handler.js or handler.ts found');
       }
     }

@@ -102,6 +102,9 @@ vi.mock('/plugins/reload-vanish/handler.js', () =>
 vi.mock('/plugins/reload-all-test/handler.js', () =>
   importMocks.get('/plugins/reload-all-test/handler.js')!(),
 );
+vi.mock('/plugins/syntax-error/handler.js', () =>
+  importMocks.get('/plugins/syntax-error/handler.js')!(),
+);
 
 // ---------------------------------------------------------------------------
 // Setup / Teardown
@@ -421,6 +424,41 @@ describe('PluginLoader', () => {
       if (!result.ok) {
         expect(result.category).toBe('missing_handler');
         expect(result.error).toContain('handler');
+      }
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Handler import failure (syntax errors)
+  // -----------------------------------------------------------------------
+
+  describe('handler import failure', () => {
+    it('reports handler.js import error instead of falling through to handler.ts', async () => {
+      const manifest = createManifest({
+        provides: {
+          channels: [],
+          tools: [createToolDeclaration({ name: 'syntax_error_tool' })],
+        },
+      });
+      mockReadFile.mockResolvedValue(JSON.stringify(manifest));
+      // handler.js exists but has a syntax error
+      allowAccess(['/plugins/syntax-error/manifest.json', '/plugins/syntax-error/handler.js']);
+      importMocks.set('/plugins/syntax-error/handler.js', () => {
+        throw new SyntaxError('Unexpected token');
+      });
+
+      const loader = new PluginLoader({
+        toolCatalog: new ToolCatalog(),
+        userPluginsDir: '/plugins',
+      });
+      const result = await loader.loadPlugin('/plugins/syntax-error');
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.category).toBe('missing_handler');
+        // The key behavior change: reports the real import error instead of
+        // falling through to handler.ts and saying "No handler.js or handler.ts found"
+        expect(result.error).toContain('handler.js exists but failed to import');
       }
     });
   });
