@@ -638,9 +638,8 @@ export class ContainerLifecycleManager {
       { hostPort: apiHostPort, containerPort: CONTAINER_API_PORT },
     ];
 
-    // nosemgrep: carapace.no-credentials-in-response-fields — internal helper,
     // apiKey stays on the host side (written to a temp file, never sent to container).
-    return { apiSocketDir, apiKey, apiHostPort, portMappings };
+    return { apiSocketDir, apiKey, apiHostPort, portMappings }; // nosemgrep: carapace.no-credentials-in-response-fields
   }
 
   /** Attempt a graceful stop with a timeout. Rejects if timeout expires. */
