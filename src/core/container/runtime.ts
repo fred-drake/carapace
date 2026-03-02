@@ -8,6 +8,11 @@
  * @see docs/INSTALL_STRATEGY.md §3 for the design rationale.
  */
 
+import { execFile as execFileCb, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFileCb);
+
 // ---------------------------------------------------------------------------
 // Runtime name
 // ---------------------------------------------------------------------------
@@ -113,6 +118,71 @@ export interface ContainerRunOptions {
    * of `docker run -d`, allowing stdin to be piped to the entrypoint.
    */
   stdinData?: string;
+  /**
+   * TCP port mappings from host to container.
+   *
+   * Format: `{ hostPort, containerPort, hostAddress? }`. Each entry maps to a
+   * `-p hostAddress:hostPort:containerPort` flag. Used for API mode where the
+   * host-side API client connects to the container's HTTP server.
+   *
+   * `hostAddress` defaults to `'127.0.0.1'` — loopback only. Adapters
+   * expand this to the full `host:hostPort:containerPort` format.
+   */
+  portMappings?: PortMapping[];
+}
+
+// ---------------------------------------------------------------------------
+// Shared exec / spawn types
+// ---------------------------------------------------------------------------
+
+/**
+ * Injectable exec function for shelling out to container CLI binaries.
+ * Returns stdout/stderr as strings. Used by all runtime adapters.
+ */
+export type ExecFn = (
+  file: string,
+  args: readonly string[],
+) => Promise<{ stdout: string; stderr: string }>;
+
+/**
+ * Result of a spawn operation, providing access to the child process streams.
+ */
+export interface SpawnResult {
+  /** Child process stdout stream (available when stdio is piped). */
+  stdout?: NodeJS.ReadableStream;
+  /** Child process stderr stream (available when stdio is piped). */
+  stderr?: NodeJS.ReadableStream;
+}
+
+/**
+ * Spawn function type for running a process with stdin data piped.
+ *
+ * Used by `docker/podman/container start -ai` to pipe credentials to the
+ * container's stdin. The spawn function should write stdinData to the
+ * child process's stdin and detach without waiting for the process to exit.
+ * Returns stdout/stderr streams for output capture.
+ */
+export type SpawnFn = (file: string, args: readonly string[], stdinData: string) => SpawnResult;
+
+// ---------------------------------------------------------------------------
+// Named port mapping type
+// ---------------------------------------------------------------------------
+
+/**
+ * A TCP port mapping from host to container.
+ *
+ * Each entry maps to a `-p hostAddress:hostPort:containerPort` flag.
+ * Used for API mode where the host-side API client connects to the
+ * container's HTTP server.
+ */
+export interface PortMapping {
+  hostPort: number;
+  containerPort: number;
+  /**
+   * Bind address on the host. When omitted, each runtime adapter applies
+   * `'127.0.0.1'` (loopback-only) as the default in its `-p` flag.
+   */
+  hostAddress?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,3 +326,42 @@ export interface ContainerRuntime {
   /** Inspect a container's current state. */
   inspect(handle: ContainerHandle): Promise<ContainerState>;
 }
+
+// ---------------------------------------------------------------------------
+// Default exec / spawn implementations
+// ---------------------------------------------------------------------------
+
+/**
+ * Default exec implementation — wraps child_process.execFile.
+ * Shared across all runtime adapters.
+ */
+export const defaultExec: ExecFn = async (file, args) => {
+  return execFileAsync(file, [...args], { encoding: 'utf-8' });
+};
+
+/**
+ * Default spawn function — uses child_process.spawn to run a process
+ * with stdin data piped, then detaches without waiting for exit.
+ * Returns stdout/stderr streams for output capture.
+ *
+ * Uses `detached: true` + `child.unref()` so the container process
+ * survives if the host process exits (consistent across all runtimes).
+ *
+ * For Apple Containers, the actual VM lifecycle is managed by the
+ * `container` runtime binary, not by this child process. `detached` +
+ * `unref()` therefore has no adverse effect — the VM is unaffected if
+ * the host-side spawn wrapper exits.
+ */
+export const defaultSpawn: SpawnFn = (file, args, stdinData) => {
+  const child = spawn(file, [...args], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: true,
+  });
+  child.stdin!.write(stdinData);
+  child.stdin!.end();
+  child.unref();
+  return {
+    stdout: child.stdout ?? undefined,
+    stderr: child.stderr ?? undefined,
+  };
+};

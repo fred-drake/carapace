@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { DockerRuntime } from './docker-runtime.js';
-import type { SpawnFn } from './docker-runtime.js';
+import type { SpawnFn } from './runtime.js';
 import type { ContainerRuntime, ContainerRunOptions } from './runtime.js';
 
 // ---------------------------------------------------------------------------
@@ -296,6 +296,26 @@ describe('DockerRuntime', () => {
       expect(imageIdx).toBeGreaterThan(epIdx);
       expect(args[imageIdx + 1]).toBe('-c');
       expect(args[imageIdx + 2]).toBe('echo hello');
+    });
+
+    it('formats port mappings with 127.0.0.1 host address by default', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'id\n', stderr: '' });
+      await runtime.run(
+        defaultRunOptions({
+          portMappings: [{ hostPort: 8080, containerPort: 3456 }],
+        }),
+      );
+      expect(mock.calls[0].args).toContain('127.0.0.1:8080:3456');
+    });
+
+    it('uses custom host address in port mappings when specified', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'id\n', stderr: '' });
+      await runtime.run(
+        defaultRunOptions({
+          portMappings: [{ hostPort: 8080, containerPort: 3456, hostAddress: '0.0.0.0' }],
+        }),
+      );
+      expect(mock.calls[0].args).toContain('0.0.0.0:8080:3456');
     });
 
     it('throws on run failure', async () => {
@@ -765,6 +785,18 @@ describe('DockerRuntime', () => {
         }),
       );
       expect(mock.calls[0].args).toContain('/host/ws:/workspace');
+    });
+
+    it('formats port mappings with 127.0.0.1 in create args', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'abc\n', stderr: '' });
+      await runtimeWithSpawn.run(
+        defaultRunOptions({
+          name: 'test',
+          stdinData: 'K=V\n\n',
+          portMappings: [{ hostPort: 9090, containerPort: 3456 }],
+        }),
+      );
+      expect(mock.calls[0].args).toContain('127.0.0.1:9090:3456');
     });
 
     it('uses standard docker run (no spawn) when stdinData is absent', async () => {

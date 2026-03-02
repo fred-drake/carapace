@@ -18,6 +18,13 @@ COPY tsconfig.json tsconfig.check.json ./
 COPY src/ src/
 RUN pnpm run build
 
+# Build claude-cli-api if only TypeScript source is available.
+# Note: `npx tsc` uses the default tsconfig.json in claude-cli-api's root.
+# If the package adds multiple tsconfig files, this may need `--project`.
+RUN if [ -d node_modules/claude-cli-api/src ] && [ ! -d node_modules/claude-cli-api/dist ]; then \
+      cd node_modules/claude-cli-api && npx tsc; \
+    fi
+
 # Prune dev dependencies for production
 RUN pnpm prune --prod
 
@@ -42,7 +49,8 @@ ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 
 RUN curl -fsSL https://claude.ai/install.sh | bash -s ${CLAUDE_CODE_VERSION} && \
-    ln -s /root/.local/bin/claude /usr/local/bin/claude
+    cp /root/.local/bin/claude /usr/local/bin/claude && \
+    chmod +x /usr/local/bin/claude
 
 WORKDIR /app
 
@@ -60,8 +68,8 @@ COPY --chown=node:node src/container/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # Create writable directories (for --read-only runtime)
-RUN mkdir -p /workspace /run/zmq /home/node/.claude /tmp && \
-    chown node:node /workspace /run/zmq /home/node/.claude
+RUN mkdir -p /workspace /run/zmq /run/api /home/node/.claude /tmp && \
+    chown node:node /workspace /run/zmq /run/api /home/node/.claude
 
 # OCI image labels for version tracking and staleness detection
 LABEL org.opencontainers.image.revision="${GIT_SHA}" \
