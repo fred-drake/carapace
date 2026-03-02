@@ -304,6 +304,26 @@ describe('PodmanRuntime', () => {
       expect(args[imageIdx + 2]).toBe('echo hello');
     });
 
+    it('formats port mappings with 127.0.0.1 host address by default', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'id\n', stderr: '' });
+      await runtime.run(
+        defaultRunOptions({
+          portMappings: [{ hostPort: 8080, containerPort: 3456 }],
+        }),
+      );
+      expect(mock.calls[0].args).toContain('127.0.0.1:8080:3456');
+    });
+
+    it('uses custom host address in port mappings when specified', async () => {
+      mock.handler.mockResolvedValueOnce({ stdout: 'id\n', stderr: '' });
+      await runtime.run(
+        defaultRunOptions({
+          portMappings: [{ hostPort: 8080, containerPort: 3456, hostAddress: '0.0.0.0' }],
+        }),
+      );
+      expect(mock.calls[0].args).toContain('0.0.0.0:8080:3456');
+    });
+
     it('throws on run failure', async () => {
       mock.handler.mockRejectedValueOnce(new Error('image not found'));
       await expect(runtime.run(defaultRunOptions())).rejects.toThrow();

@@ -39,6 +39,7 @@ import {
 } from './credential-reader.js';
 import { createLogger, type Logger } from './logger.js';
 import { SkillLoader } from './skill-loader.js';
+import { ApiOutputReader } from './api-output-reader.js';
 
 // ---------------------------------------------------------------------------
 // Config
@@ -84,6 +85,12 @@ export interface ServerConfig {
    * Unix domain sockets don't cross the VM boundary.
    */
   tcpRequestPort?: number;
+  /**
+   * Enable API mode: containers run claude-cli-api server instead of
+   * direct claude exec. Prompts are sent via HTTP, responses streamed
+   * back as SSE. Default: false (legacy direct-exec mode).
+   */
+  useApiMode?: boolean;
 }
 
 /** Minimal filesystem interface for prompt file watching. */
@@ -286,6 +293,7 @@ export class Server {
         claudeSessionStore: this.claudeSessionStore ?? undefined,
         responseSanitizer: this.responseSanitizer ?? undefined,
         networkName: this.config.networkName,
+        useApiMode: this.config.useApiMode,
       });
 
       const lifecycleManager = this.lifecycleManager;
@@ -294,6 +302,9 @@ export class Server {
       const credFs = this.credentialFs;
       const claudeSessionStore = this.claudeSessionStore;
       const pFs = this.promptFs;
+      const eventBus = this.eventBus;
+      const responseSanitizer = this.responseSanitizer;
+      const serverLogger = this.logger;
 
       // Create SkillLoader for aggregating skills before spawn
       if (config.skillsDir) {
@@ -343,17 +354,99 @@ export class Server {
             await skillLoader.aggregateSkills();
           }
 
+          // In API mode, extract prompt from env (it's sent via HTTP, not as env var).
+          // env may be undefined when the event trigger provides no extra env vars —
+          // optional chaining handles this safely.
+          const taskPrompt = env?.['CARAPACE_TASK_PROMPT'];
+          const resumeSessionId = env?.['CARAPACE_RESUME_SESSION_ID'];
+          const spawnEnv = env ? { ...env } : env;
+          if (config.useApiMode && spawnEnv) {
+            delete spawnEnv['CARAPACE_TASK_PROMPT'];
+            delete spawnEnv['CARAPACE_RESUME_SESSION_ID'];
+          }
+
+          // Defense-in-depth: warn if stdinData accidentally contains the task
+          // prompt. stdinData is piped to the entrypoint as env vars — the prompt
+          // should only travel via HTTP in API mode or CARAPACE_TASK_PROMPT env var.
+          if (stdinData && stdinData.includes('CARAPACE_TASK_PROMPT')) {
+            serverLogger.warn(
+              'stdinData contains CARAPACE_TASK_PROMPT — possible credential leak',
+              {
+                group,
+              },
+            );
+          }
+
           const managed = await lifecycleManager.spawn({
             group,
             image: config.containerImage ?? 'carapace-agent:latest',
             socketPath: provision.requestSocketPath,
             workspacePath: config.workspacePath,
-            env,
+            env: spawnEnv,
             stdinData,
             claudeStatePath,
             skillsDir: config.skillsDir,
             tcpRequestAddress,
           });
+
+          // In API mode: send prompt via HTTP and stream response to EventBus.
+          // Capture apiClient before the IIFE so TypeScript knows it's defined
+          // (the `if` guard above already checked `managed.apiClient`).
+          const apiClient = managed.apiClient;
+          if (config.useApiMode && apiClient && (!taskPrompt || !eventBus || !claudeSessionStore)) {
+            // API mode container spawned but missing required streaming deps —
+            // shut down immediately to prevent orphaned containers.
+            serverLogger.warn(
+              'API mode container spawned without task prompt or deps, shutting down',
+              {
+                group,
+                hasPrompt: !!taskPrompt,
+                hasEventBus: !!eventBus,
+                hasSessionStore: !!claudeSessionStore,
+              },
+            );
+            await lifecycleManager.shutdown(managed.session.sessionId);
+            return managed.session.sessionId;
+          }
+          if (apiClient && taskPrompt && eventBus && claudeSessionStore) {
+            const apiReader = new ApiOutputReader({
+              eventBus,
+              claudeSessionStore,
+              sanitizer: responseSanitizer ?? undefined,
+              logger: serverLogger.child('api-output-reader'),
+            });
+
+            // Fire-and-forget: stream in background, shut down container when done.
+            // Race note: if an external shutdown kills the apiClient while the
+            // stream is in-flight, the stream errors (caught below), and the
+            // finally-block shutdown() is a benign no-op (session already removed).
+            void (async () => {
+              try {
+                const events = apiClient.completeStream({
+                  prompt: taskPrompt,
+                  sessionId: resumeSessionId,
+                });
+                await apiReader.processStream(
+                  events,
+                  {
+                    sessionId: managed.session.sessionId,
+                    group,
+                    containerId: managed.handle.id,
+                  },
+                  managed.handle.stderr,
+                );
+              } catch (streamErr) {
+                serverLogger.warn('API stream processing failed', {
+                  group,
+                  session: managed.session.sessionId,
+                  error: streamErr instanceof Error ? streamErr.message : String(streamErr),
+                });
+              } finally {
+                await lifecycleManager.shutdown(managed.session.sessionId);
+              }
+            })();
+          }
+
           return managed.session.sessionId;
         },
         maxSessionsPerGroup: config.maxSessionsPerGroup ?? 3,

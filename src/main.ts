@@ -179,6 +179,20 @@ async function confirm(prompt: string): Promise<boolean> {
 /** Default TCP port for the ZeroMQ request channel (Apple Containers). */
 const TCP_REQUEST_PORT = 5560;
 
+/** Return the default network name for API mode based on the container runtime. */
+function defaultApiModeNetworkName(runtime?: ContainerRuntime): string {
+  switch (runtime?.name) {
+    case 'docker':
+      return 'bridge';
+    case 'podman':
+      return 'podman';
+    case 'apple-container':
+      return 'default';
+    default:
+      return 'bridge';
+  }
+}
+
 function createStartServer(
   home: string,
   containerRuntime?: ContainerRuntime,
@@ -206,10 +220,19 @@ function createStartServer(
     containerImage: readCurrentImageTag(home),
     claudeStateDir: join(home, 'data', 'claude-state'),
     sessionDbPath: join(home, 'data', 'claude-sessions.sqlite'),
-    networkName: 'default',
+    // API mode needs a named network for port publishing (-p is ignored with
+    // --network none). Legacy mode uses --network none for full isolation.
+    // Network names are runtime-specific: Docker='bridge', Podman='podman',
+    // Apple Containers='default'.
+    networkName:
+      process.env.CARAPACE_USE_API_MODE === '1'
+        ? defaultApiModeNetworkName(containerRuntime)
+        : undefined,
     skillsDir,
     // Apple Containers need TCP transport (IPC sockets don't cross VM boundary)
     tcpRequestPort: containerRuntime?.name === 'apple-container' ? TCP_REQUEST_PORT : undefined,
+    // API mode: containers run claude-cli-api server. Enable with CARAPACE_USE_API_MODE=1.
+    useApiMode: process.env.CARAPACE_USE_API_MODE === '1',
   };
 
   // Reserved plugin names — built-in plugins that cannot be overridden

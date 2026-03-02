@@ -34,7 +34,42 @@ done
 exec < /dev/null
 
 # ---------------------------------------------------------------------------
-# Exec into Claude Code
+# API mode: start claude-cli-api server
+# ---------------------------------------------------------------------------
+
+if [ "${CARAPACE_API_MODE:-}" = "1" ]; then
+  # Read API key from file and export, then delete the file.
+  # The bearer token IS visible in the container's process environment —
+  # this is acceptable since the container is the consumer. The file is
+  # deleted to avoid duplicate persistence.
+  if [ -f "${CARAPACE_API_KEY_FILE:-}" ]; then
+    API_KEY="$(cat "$CARAPACE_API_KEY_FILE")"
+    if [ -z "$API_KEY" ]; then
+      echo "ERROR: API key file was empty" >&2
+      exit 1
+    fi
+    export API_KEY
+    rm -f "$CARAPACE_API_KEY_FILE"
+  fi
+
+  # Guard: even if the file-read block was skipped (file missing), API_KEY must
+  # be set for claude-cli-api to authenticate requests.
+  if [ -z "${API_KEY:-}" ]; then
+    echo "ERROR: API_KEY not set (key file missing or unreadable)" >&2
+    exit 1
+  fi
+
+  # Unset the key file path so child processes can't discover it
+  unset CARAPACE_API_KEY_FILE
+
+  # MAX_CONCURRENT_PROCESSES is set by the lifecycle manager via env vars —
+  # the host is the single source of truth for concurrency limits.
+
+  exec node /app/node_modules/claude-cli-api/dist/index.js
+fi
+
+# ---------------------------------------------------------------------------
+# Exec into Claude Code (legacy direct-exec mode)
 # ---------------------------------------------------------------------------
 
 if [ -n "${CARAPACE_RESUME_SESSION_ID:-}" ]; then

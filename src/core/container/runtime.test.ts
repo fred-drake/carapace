@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { defaultExec, defaultSpawn } from './runtime.js';
 import type {
   ContainerRuntime,
   ContainerRunOptions,
@@ -239,5 +240,51 @@ describe('ContainerRuntime', () => {
     // Compile-time assertion
     const _check: AssertAssignable<ContainerRuntime['name'], RuntimeName> = true;
     expect(_check).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// defaultExec
+// ---------------------------------------------------------------------------
+
+describe('defaultExec', () => {
+  it('runs a command and returns stdout as a string', async () => {
+    const result = await defaultExec('echo', ['hello']);
+    expect(result.stdout.trim()).toBe('hello');
+    expect(typeof result.stdout).toBe('string');
+  });
+
+  it('captures stderr as a string', async () => {
+    const result = await defaultExec('sh', ['-c', 'echo err >&2']);
+    expect(result.stderr.trim()).toBe('err');
+    expect(typeof result.stderr).toBe('string');
+  });
+
+  it('rejects when the command fails', async () => {
+    await expect(defaultExec('false', [])).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// defaultSpawn
+// ---------------------------------------------------------------------------
+
+describe('defaultSpawn', () => {
+  it('pipes stdinData and returns stdout/stderr streams', async () => {
+    const result = defaultSpawn('cat', [], 'hello from stdin');
+    expect(result.stdout).toBeDefined();
+
+    // Read stdout to verify stdin was piped
+    const chunks: string[] = [];
+    result.stdout!.setEncoding('utf-8');
+    for await (const chunk of result.stdout! as AsyncIterable<string>) {
+      chunks.push(chunk);
+    }
+    expect(chunks.join('')).toBe('hello from stdin');
+  });
+
+  it('returns stderr stream', () => {
+    const result = defaultSpawn('sh', ['-c', 'echo err >&2'], '');
+    expect(result.stderr).toBeDefined();
   });
 });

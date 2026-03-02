@@ -30,7 +30,8 @@
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --project integration --passWithNoTests",
     "test:security": "vitest run --project security --passWithNoTests",
-    "test:e2e": "vitest run --project e2e --passWithNoTests",
+    "test:e2e": "vitest run --project e2e",
+    "build:image": "pnpm run build && node dist/main.js build",
     "test:conformance": "vitest run --project conformance --passWithNoTests",
     "test:bench": "vitest bench --config vitest.bench.config.ts",
     "test:bench:ci": "vitest bench --config vitest.bench.config.ts --outputJson bench-results.json"
@@ -48,6 +49,7 @@
   "dependencies": {
     "ajv": "^8.17.0",
     "better-sqlite3": "^11.7.0",
+    "claude-cli-api": "github:fred-drake/claude-cli-api",
     "smol-toml": "^1.6.0",
     "zeromq": "^6.4.0"
   },
@@ -58,7 +60,9 @@
       "esbuild"
     ],
     "overrides": {
-      "minimatch@<10": "10.2.1"
+      "minimatch@<10": "10.2.3",
+      "minimatch@>=10 <10.2.3": "10.2.3",
+      "rollup@>=4 <4.59.0": "4.59.0"
     }
   }
 }

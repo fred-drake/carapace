@@ -17,44 +17,17 @@
  * - **No SELinux relabeling**: macOS doesn't use SELinux, so no `:Z` suffix.
  */
 
-import { execFile as execFileCb, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
 import type {
   ContainerRuntime,
   ContainerRunOptions,
   ContainerHandle,
   ContainerState,
   ImageBuildOptions,
+  ExecFn,
+  SpawnFn,
 } from './runtime.js';
-
-const execFileAsync = promisify(execFileCb);
-
-// ---------------------------------------------------------------------------
-// Exec function type (injectable for testing)
-// ---------------------------------------------------------------------------
-
-export type ExecFn = (
-  file: string,
-  args: readonly string[],
-) => Promise<{ stdout: string; stderr: string }>;
-
-/**
- * Result from spawning a container process with stdin piping.
- * Provides stdout/stderr streams for output reading.
- */
-export interface SpawnResult {
-  stdout?: NodeJS.ReadableStream;
-  stderr?: NodeJS.ReadableStream;
-}
-
-/**
- * Spawn function type for running a process with stdin data piped.
- *
- * Used by `container start -ai` to pipe credentials to the container's stdin.
- * The spawn function should write stdinData to the child process's stdin
- * and detach without waiting for the process to exit.
- */
-export type SpawnFn = (file: string, args: readonly string[], stdinData: string) => SpawnResult;
+import { defaultExec, defaultSpawn } from './runtime.js';
+import { CONTAINER_ZERO_TIME } from './constants.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -68,12 +41,6 @@ export interface AppleContainerRuntimeOptions {
   /** Injectable spawn function for stdin piping. Defaults to child_process.spawn. */
   spawn?: SpawnFn;
 }
-
-// ---------------------------------------------------------------------------
-// Zero-value timestamp
-// ---------------------------------------------------------------------------
-
-const ZERO_TIME = '0001-01-01T00:00:00Z';
 
 // ---------------------------------------------------------------------------
 // State mapping
@@ -253,8 +220,8 @@ export class AppleContainerRuntime implements ContainerRuntime {
     return {
       status,
       exitCode: isTerminal ? raw.ExitCode : undefined,
-      startedAt: raw.StartedAt !== ZERO_TIME ? raw.StartedAt : undefined,
-      finishedAt: raw.FinishedAt !== ZERO_TIME ? raw.FinishedAt : undefined,
+      startedAt: raw.StartedAt !== CONTAINER_ZERO_TIME ? raw.StartedAt : undefined,
+      finishedAt: raw.FinishedAt !== CONTAINER_ZERO_TIME ? raw.FinishedAt : undefined,
       health: 'none',
     };
   }
@@ -310,8 +277,13 @@ export class AppleContainerRuntime implements ContainerRuntime {
       args.push('--user', options.user);
     }
 
+    for (const pm of options.portMappings ?? []) {
+      const host = pm.hostAddress ?? '127.0.0.1';
+      args.push('-p', `${host}:${pm.hostPort}:${pm.containerPort}`);
+    }
+
     if (options.entrypoint && options.entrypoint.length > 0) {
-      args.push('--entrypoint', options.entrypoint[0]);
+      args.push('--entrypoint', options.entrypoint[0]!);
       args.push(options.image);
       args.push(...options.entrypoint.slice(1));
     } else {
@@ -323,35 +295,3 @@ export class AppleContainerRuntime implements ContainerRuntime {
     return this.exec(this.containerPath, args);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Default exec (wraps child_process.execFile)
-// ---------------------------------------------------------------------------
-
-const defaultExec: ExecFn = async (file, args) => {
-  const result = (await execFileAsync(file, [...args])) as {
-    stdout: string | Buffer;
-    stderr: string | Buffer;
-  };
-  return {
-    stdout: typeof result.stdout === 'string' ? result.stdout : result.stdout.toString(),
-    stderr: typeof result.stderr === 'string' ? result.stderr : result.stderr.toString(),
-  };
-};
-
-// ---------------------------------------------------------------------------
-// Default spawn (wraps child_process.spawn for stdin piping)
-// ---------------------------------------------------------------------------
-
-const defaultSpawn: SpawnFn = (file, args, stdinData) => {
-  const child = spawn(file, [...args], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  child.stdin!.write(stdinData);
-  child.stdin!.end();
-
-  return {
-    stdout: child.stdout ?? undefined,
-    stderr: child.stderr ?? undefined,
-  };
-};

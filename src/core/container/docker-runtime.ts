@@ -12,46 +12,17 @@
  * - Socket mounts are regular bind mounts (`-v host:container`).
  */
 
-import { execFile as execFileCb, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
 import type {
   ContainerRuntime,
   ContainerRunOptions,
   ContainerHandle,
   ContainerState,
   ImageBuildOptions,
+  ExecFn,
+  SpawnFn,
 } from './runtime.js';
-
-const execFileAsync = promisify(execFileCb);
-
-// ---------------------------------------------------------------------------
-// Exec function type (injectable for testing)
-// ---------------------------------------------------------------------------
-
-export type ExecFn = (
-  file: string,
-  args: readonly string[],
-) => Promise<{ stdout: string; stderr: string }>;
-
-/**
- * Result of a spawn operation, providing access to the child process streams.
- */
-export interface SpawnResult {
-  /** Child process stdout stream (available when stdio is piped). */
-  stdout?: NodeJS.ReadableStream;
-  /** Child process stderr stream (available when stdio is piped). */
-  stderr?: NodeJS.ReadableStream;
-}
-
-/**
- * Spawn function type for running a process with stdin data piped.
- *
- * Used by `docker start -ai` to pipe credentials to the container's stdin.
- * The spawn function should write stdinData to the child process's stdin
- * and detach without waiting for the process to exit. Returns stdout/stderr
- * streams for output capture.
- */
-export type SpawnFn = (file: string, args: readonly string[], stdinData: string) => SpawnResult;
+import { defaultExec, defaultSpawn } from './runtime.js';
+import { CONTAINER_ZERO_TIME } from './constants.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -65,12 +36,6 @@ export interface DockerRuntimeOptions {
   /** Injectable spawn function for stdin piping. Defaults to child_process.spawn. */
   spawn?: SpawnFn;
 }
-
-// ---------------------------------------------------------------------------
-// Docker zero-value timestamp
-// ---------------------------------------------------------------------------
-
-const DOCKER_ZERO_TIME = '0001-01-01T00:00:00Z';
 
 // ---------------------------------------------------------------------------
 // Docker state mapping
@@ -260,8 +225,8 @@ export class DockerRuntime implements ContainerRuntime {
     return {
       status,
       exitCode: isTerminal ? raw.ExitCode : undefined,
-      startedAt: raw.StartedAt !== DOCKER_ZERO_TIME ? raw.StartedAt : undefined,
-      finishedAt: raw.FinishedAt !== DOCKER_ZERO_TIME ? raw.FinishedAt : undefined,
+      startedAt: raw.StartedAt !== CONTAINER_ZERO_TIME ? raw.StartedAt : undefined,
+      finishedAt: raw.FinishedAt !== CONTAINER_ZERO_TIME ? raw.FinishedAt : undefined,
       health: mapHealthStatus(raw.Health?.Status),
     };
   }
@@ -276,48 +241,18 @@ export class DockerRuntime implements ContainerRuntime {
    */
   private buildCreateArgs(options: ContainerRunOptions, name: string): string[] {
     const args: string[] = ['create', '-i', '--name', name];
-
-    if (options.readOnly) {
-      args.push('--read-only');
-    }
-
-    if (options.network) {
-      args.push('--network', options.network);
-    } else if (options.networkDisabled) {
-      args.push('--network', 'none');
-    }
-
-    for (const vol of options.volumes) {
-      const suffix = vol.readonly ? ':ro' : '';
-      args.push('-v', `${vol.source}:${vol.target}${suffix}`);
-    }
-
-    for (const sock of options.socketMounts) {
-      args.push('-v', `${sock.hostPath}:${sock.containerPath}`);
-    }
-
-    for (const [key, value] of Object.entries(options.env)) {
-      args.push('-e', `${key}=${value}`);
-    }
-
-    if (options.user) {
-      args.push('--user', options.user);
-    }
-
-    if (options.entrypoint && options.entrypoint.length > 0) {
-      args.push('--entrypoint', options.entrypoint[0]);
-      args.push(options.image);
-      args.push(...options.entrypoint.slice(1));
-    } else {
-      args.push(options.image);
-    }
-
+    this.appendCommonArgs(args, options);
     return args;
   }
 
   private buildRunArgs(options: ContainerRunOptions, name: string): string[] {
     const args: string[] = ['run', '-d', '--name', name];
+    this.appendCommonArgs(args, options);
+    return args;
+  }
 
+  /** Append network, volumes, socket mounts, env, user, ports, and image args. */
+  private appendCommonArgs(args: string[], options: ContainerRunOptions): void {
     if (options.readOnly) {
       args.push('--read-only');
     }
@@ -346,52 +281,21 @@ export class DockerRuntime implements ContainerRuntime {
       args.push('--user', options.user);
     }
 
+    for (const pm of options.portMappings ?? []) {
+      const host = pm.hostAddress ?? '127.0.0.1';
+      args.push('-p', `${host}:${pm.hostPort}:${pm.containerPort}`);
+    }
+
     if (options.entrypoint && options.entrypoint.length > 0) {
-      args.push('--entrypoint', options.entrypoint[0]);
+      args.push('--entrypoint', options.entrypoint[0]!);
       args.push(options.image);
       args.push(...options.entrypoint.slice(1));
     } else {
       args.push(options.image);
     }
-
-    return args;
   }
 
   private async docker(...args: string[]): Promise<{ stdout: string; stderr: string }> {
     return this.exec(this.dockerPath, args);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Default exec (wraps child_process.execFile)
-// ---------------------------------------------------------------------------
-
-const defaultExec: ExecFn = async (file, args) => {
-  const result = (await execFileAsync(file, [...args])) as {
-    stdout: string | Buffer;
-    stderr: string | Buffer;
-  };
-  return {
-    stdout: typeof result.stdout === 'string' ? result.stdout : result.stdout.toString(),
-    stderr: typeof result.stderr === 'string' ? result.stderr : result.stderr.toString(),
-  };
-};
-
-/**
- * Default spawn function — uses child_process.spawn to run a process
- * with stdin data piped, then detaches without waiting for exit.
- * Returns stdout/stderr streams for output capture.
- */
-const defaultSpawn: SpawnFn = (file, args, stdinData) => {
-  const child = spawn(file, [...args], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    detached: true,
-  });
-  child.stdin!.write(stdinData);
-  child.stdin!.end();
-  child.unref();
-  return {
-    stdout: child.stdout ?? undefined,
-    stderr: child.stderr ?? undefined,
-  };
-};

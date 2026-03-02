@@ -14,26 +14,17 @@
  * - Version format uses `{{.Client.Version}}` (no server daemon).
  */
 
-import { execFile as execFileCb } from 'node:child_process';
-import { promisify } from 'node:util';
 import type {
   ContainerRuntime,
   ContainerRunOptions,
   ContainerHandle,
   ContainerState,
   ImageBuildOptions,
+  ExecFn,
+  SpawnFn,
 } from './runtime.js';
-
-const execFileAsync = promisify(execFileCb);
-
-// ---------------------------------------------------------------------------
-// Exec function type (injectable for testing)
-// ---------------------------------------------------------------------------
-
-export type ExecFn = (
-  file: string,
-  args: readonly string[],
-) => Promise<{ stdout: string; stderr: string }>;
+import { defaultExec, defaultSpawn } from './runtime.js';
+import { CONTAINER_ZERO_TIME } from './constants.js';
 
 // ---------------------------------------------------------------------------
 // Options
@@ -44,13 +35,9 @@ export interface PodmanRuntimeOptions {
   exec?: ExecFn;
   /** Path to the podman binary. Defaults to `'podman'`. */
   podmanPath?: string;
+  /** Injectable spawn function for stdin piping. Defaults to child_process.spawn. */
+  spawn?: SpawnFn;
 }
-
-// ---------------------------------------------------------------------------
-// Zero-value timestamp (shared with Docker)
-// ---------------------------------------------------------------------------
-
-const ZERO_TIME = '0001-01-01T00:00:00Z';
 
 // ---------------------------------------------------------------------------
 // Podman state mapping
@@ -101,10 +88,12 @@ export class PodmanRuntime implements ContainerRuntime {
 
   private readonly exec: ExecFn;
   private readonly podmanPath: string;
+  private readonly spawnFn: SpawnFn;
 
   constructor(options?: PodmanRuntimeOptions) {
     this.exec = options?.exec ?? defaultExec;
     this.podmanPath = options?.podmanPath ?? 'podman';
+    this.spawnFn = options?.spawn ?? defaultSpawn;
   }
 
   // -----------------------------------------------------------------------
@@ -180,6 +169,19 @@ export class PodmanRuntime implements ContainerRuntime {
 
   async run(options: ContainerRunOptions): Promise<ContainerHandle> {
     const name = options.name ?? `carapace-${Date.now()}`;
+
+    if (options.stdinData !== undefined) {
+      // Two-step create + start for stdin piping (credential injection)
+      const createArgs = this.buildCreateArgs(options, name);
+      const { stdout } = await this.podman(...createArgs);
+      const id = stdout.trim();
+
+      // Start container with stdin attached; pipe credentials
+      const streams = this.spawnFn(this.podmanPath, ['start', '-ai', id], options.stdinData);
+
+      return { id, name, runtime: this.name, stdout: streams.stdout, stderr: streams.stderr };
+    }
+
     const args = this.buildRunArgs(options, name);
     const { stdout } = await this.podman(...args);
     const id = stdout.trim();
@@ -225,8 +227,8 @@ export class PodmanRuntime implements ContainerRuntime {
     return {
       status,
       exitCode: isTerminal ? raw.ExitCode : undefined,
-      startedAt: raw.StartedAt !== ZERO_TIME ? raw.StartedAt : undefined,
-      finishedAt: raw.FinishedAt !== ZERO_TIME ? raw.FinishedAt : undefined,
+      startedAt: raw.StartedAt !== CONTAINER_ZERO_TIME ? raw.StartedAt : undefined,
+      finishedAt: raw.FinishedAt !== CONTAINER_ZERO_TIME ? raw.FinishedAt : undefined,
       health: mapHealthStatus(healthRaw),
     };
   }
@@ -235,9 +237,24 @@ export class PodmanRuntime implements ContainerRuntime {
   // Internals
   // -----------------------------------------------------------------------
 
+  /**
+   * Build args for `podman create -i` (stdin piping via start -ai).
+   * Same flags as buildRunArgs but uses `create -i` instead of `run -d`.
+   */
+  private buildCreateArgs(options: ContainerRunOptions, name: string): string[] {
+    const args: string[] = ['create', '-i', '--name', name];
+    this.appendCommonArgs(args, options);
+    return args;
+  }
+
   private buildRunArgs(options: ContainerRunOptions, name: string): string[] {
     const args: string[] = ['run', '-d', '--name', name];
+    this.appendCommonArgs(args, options);
+    return args;
+  }
 
+  /** Append Podman-specific flags: userns, network, volumes (:Z), env, user, ports, image. */
+  private appendCommonArgs(args: string[], options: ContainerRunOptions): void {
     // Podman-specific: rootless UID mapping
     args.push('--userns=keep-id');
 
@@ -270,33 +287,21 @@ export class PodmanRuntime implements ContainerRuntime {
       args.push('--user', options.user);
     }
 
+    for (const pm of options.portMappings ?? []) {
+      const host = pm.hostAddress ?? '127.0.0.1';
+      args.push('-p', `${host}:${pm.hostPort}:${pm.containerPort}`);
+    }
+
     if (options.entrypoint && options.entrypoint.length > 0) {
-      args.push('--entrypoint', options.entrypoint[0]);
+      args.push('--entrypoint', options.entrypoint[0]!);
       args.push(options.image);
       args.push(...options.entrypoint.slice(1));
     } else {
       args.push(options.image);
     }
-
-    return args;
   }
 
   private async podman(...args: string[]): Promise<{ stdout: string; stderr: string }> {
     return this.exec(this.podmanPath, args);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Default exec (wraps child_process.execFile)
-// ---------------------------------------------------------------------------
-
-const defaultExec: ExecFn = async (file, args) => {
-  const result = (await execFileAsync(file, [...args])) as {
-    stdout: string | Buffer;
-    stderr: string | Buffer;
-  };
-  return {
-    stdout: typeof result.stdout === 'string' ? result.stdout : result.stdout.toString(),
-    stderr: typeof result.stderr === 'string' ? result.stderr : result.stderr.toString(),
-  };
-};

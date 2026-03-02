@@ -6,8 +6,14 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
+    flake-utils.lib.eachDefaultSystem (
+      system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
       in
@@ -114,7 +120,26 @@
             echo "🐚 Carapace dev shell loaded"
             echo "   Node.js: $(node --version)"
             echo "   pnpm:    $(pnpm --version)"
+
+            # Load API keys from sops-nix secrets (for E2E tests)
+            secret_file="$HOME/.config/sops-nix/secrets/llm-anthropic"
+            if [ -f "$secret_file" ] && [ -r "$secret_file" ]; then
+              export ANTHROPIC_API_KEY="$(cat "$secret_file")"
+            fi
+
+            secret_file="$HOME/.config/sops-nix/secrets/llm-openai"
+            if [ -f "$secret_file" ] && [ -r "$secret_file" ]; then
+              export OPENAI_KEY="$(cat "$secret_file")"
+            fi
+
+            secret_file="$HOME/.config/sops-nix/secrets/llm-deepseek"
+            if [ -f "$secret_file" ] && [ -r "$secret_file" ]; then
+              export DEEPSEEK_KEY="$(cat "$secret_file")"
+            fi
+
+            unset secret_file
           '';
         };
-      });
+      }
+    );
 }
