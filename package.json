@@ -60,7 +60,9 @@
       "esbuild"
     ],
     "overrides": {
-      "minimatch@<10": "10.2.1"
+      "minimatch@<10": "10.2.3",
+      "minimatch@>=10 <10.2.3": "10.2.3",
+      "rollup@>=4 <4.59.0": "4.59.0"
     }
   }
 }
