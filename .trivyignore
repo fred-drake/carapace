@@ -8,6 +8,8 @@ CVE-2025-64756
 
 # minimatch — bundled in Claude Code / npm internals
 CVE-2026-26996
+CVE-2026-27903
+CVE-2026-27904
 
 # tar (node-tar) — bundled in Claude Code / npm internals
 CVE-2026-23745
