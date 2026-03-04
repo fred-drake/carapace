@@ -259,6 +259,7 @@ export class Server {
       builtinPluginsDir: this.config.builtinPluginsDir,
       credentialsPluginsDir: this.config.credentialsPluginsDir,
       logger: this.logger.child('plugin-loader'),
+      eventBus: this.eventBus ?? undefined,
     });
 
     this.router = new MessageRouter(this.toolCatalog);
