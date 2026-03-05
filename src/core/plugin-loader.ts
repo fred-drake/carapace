@@ -69,6 +69,7 @@ export class PluginLoader {
   private readonly credentialsPluginsDir: string | undefined;
   private readonly initTimeoutMs: number;
   private readonly eventBus: EventBus | undefined;
+  private readonly verifyOnly: boolean;
   private readonly logger: Logger;
   private readonly loadedHandlers: Map<string, PluginHandler> = new Map();
   private readonly loadedManifests: Map<string, PluginManifest> = new Map();
@@ -81,6 +82,7 @@ export class PluginLoader {
     credentialsPluginsDir?: string;
     initTimeoutMs?: number;
     eventBus?: EventBus;
+    verifyOnly?: boolean;
     logger?: Logger;
   }) {
     this.toolCatalog = opts.toolCatalog;
@@ -89,6 +91,7 @@ export class PluginLoader {
     this.credentialsPluginsDir = opts.credentialsPluginsDir;
     this.initTimeoutMs = opts.initTimeoutMs ?? 10_000;
     this.eventBus = opts.eventBus;
+    this.verifyOnly = opts.verifyOnly ?? false;
     this.logger = opts.logger ?? createLogger('plugin-loader');
   }
 
@@ -749,6 +752,7 @@ export class PluginLoader {
       readCredential: (key: string): string => {
         return this.readPluginCredential(pluginName, key);
       },
+      verifyOnly: this.verifyOnly,
     };
 
     let services: CoreServices | ChannelServices;

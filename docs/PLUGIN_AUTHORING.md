@@ -15,12 +15,13 @@ production.
 4. [Handler Interface](#handler-interface)
 5. [Skill Files](#skill-files)
 6. [Error Handling](#error-handling)
-7. [Testing Guide](#testing-guide)
-8. [Walkthrough: Echo Plugin](#walkthrough-echo-plugin)
-9. [Walkthrough: Memory Plugin](#walkthrough-memory-plugin)
-10. [Debugging](#debugging)
-11. [Validation & Deployment](#validation--deployment)
-12. [Security Considerations](#security-considerations)
+7. [Live Verification (`verify()`)](#live-verification-verify)
+8. [Testing Guide](#testing-guide)
+9. [Walkthrough: Echo Plugin](#walkthrough-echo-plugin)
+10. [Walkthrough: Memory Plugin](#walkthrough-memory-plugin)
+11. [Debugging](#debugging)
+12. [Validation & Deployment](#validation--deployment)
+13. [Security Considerations](#security-considerations)
 
 ---
 
@@ -296,6 +297,12 @@ interface CoreServices {
 
   // Get current session info
   getSessionInfo(): SessionInfo;
+
+  // Read a credential file from the plugin's scoped credential directory
+  readCredential(key: string): string;
+
+  // When true, handler is in verify-only mode (see Live Verification section)
+  verifyOnly?: boolean;
 }
 ```
 
@@ -506,6 +513,124 @@ const msg = formatErrorMessage({
 
 ---
 
+## Live Verification (`verify()`)
+
+The optional `verify()` method on `PluginHandler` gives users a "Test" button
+experience — confirming credentials work end-to-end before they start a session.
+
+### When It's Called
+
+- **`carapace doctor --live`** — runs offline checks, then loads plugins and
+  calls `verify()` on each handler.
+- **`carapace doctor --live <plugin-name>`** — verifies only the named plugin.
+- **`plugin_verify` tool** — callable at runtime by the installer plugin.
+
+### Contract
+
+Your `verify()` method must:
+
+- **Complete within 10 seconds** — a `Promise.race` timeout enforces this.
+- **Be read-only** — no side effects, no data mutation, no event publishing.
+- **Not leak credentials** — never include token values in the `message` field.
+- **Be safe to call multiple times** — idempotent, no state changes.
+
+### Return Type
+
+```typescript
+interface PluginVerifyResult {
+  ok: boolean;
+  message: string;
+  detail?: Record<string, unknown>;
+}
+```
+
+- `ok: true` → `PASS` in doctor output, `message` is displayed.
+- `ok: false` → `FAIL` in doctor output, `message` explains the failure.
+- `detail` is optional metadata (not displayed, but available to tooling).
+
+### The `verifyOnly` Flag
+
+When `carapace doctor --live` loads your plugin, `CoreServices.verifyOnly` is
+set to `true`. Check this flag in `initialize()` to skip background work:
+
+```typescript
+async initialize(services: CoreServices): Promise<void> {
+  this.readCredential = services.readCredential;
+
+  if (services.verifyOnly) {
+    return; // Skip polling, listeners, timers
+  }
+
+  // Normal initialization: start polling, etc.
+  this.startPolling();
+}
+```
+
+This keeps verify-mode fast and avoids side effects like starting pollers or
+opening persistent connections.
+
+### Implementation Pattern
+
+Store the `readCredential` reference during `initialize()`, then use it in
+`verify()`:
+
+```typescript
+class TelegramHandler implements PluginHandler {
+  private readCredential!: (key: string) => string;
+
+  async initialize(services: CoreServices): Promise<void> {
+    this.readCredential = services.readCredential;
+    if (services.verifyOnly) return;
+    // ... normal init
+  }
+
+  async verify(): Promise<PluginVerifyResult> {
+    const token = this.readCredential('bot-token');
+    const res = await fetch(`https://api.telegram.org/bot${token}/getMe`);
+    if (!res.ok) {
+      return { ok: false, message: `Telegram API: ${res.status}` };
+    }
+    const data = await res.json();
+    const username = data.result.username;
+    return { ok: true, message: `Bot @${username} is reachable` };
+  }
+
+  // ... handleToolInvocation, shutdown
+}
+```
+
+### Common Patterns
+
+| Service      | Verify Approach                       |
+| ------------ | ------------------------------------- |
+| HTTP API     | `GET /status` or lightweight endpoint |
+| Telegram bot | `getMe()` — returns bot info          |
+| Database     | `SELECT 1` or connection test         |
+| SMTP         | `EHLO` handshake (don't send mail)    |
+| File storage | Check bucket exists (don't write)     |
+
+### Output Examples
+
+```
+$ carapace doctor --live
+  ...offline checks...
+  WARN  Live: hello-world: No verify() — implement verify() for live testing
+  PASS  Live: telegram: Bot @my_bot is reachable
+
+$ carapace doctor --live telegram
+  ...offline checks...
+  PASS  Live: telegram: Bot @my_bot is reachable
+```
+
+With a bad credential:
+
+```
+  FAIL  Live: telegram: Telegram API: 401 Unauthorized
+        Fix: Check credentials at the plugin's credential directory
+```
+
+---
+
 ## Testing Guide
 
 Carapace provides a plugin test SDK for testing handlers in isolation — no
@@ -660,6 +785,43 @@ describe('my-plugin', () => {
 - Tools are registered in the catalog
 - Initialization timeout is respected
 - Shutdown releases resources
+
+### Testing `verify()`
+
+Test your `verify()` method using `FakeCredentialStore` and mock HTTP responses:
+
+```typescript
+describe('verify()', () => {
+  it('returns ok when API is reachable', async () => {
+    const handler = new MyHandler();
+    const creds = new FakeCredentialStore({ 'bot-token': 'test-token' });
+    await handler.initialize({
+      ...stubCoreServices,
+      readCredential: (key) => creds.get(key)!,
+    });
+
+    // Mock your API call here
+    const result = await handler.verify();
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain('reachable');
+  });
+
+  it('returns failure on bad credentials', async () => {
+    const handler = new MyHandler();
+    const creds = new FakeCredentialStore({ 'bot-token': 'invalid' });
+    await handler.initialize({
+      ...stubCoreServices,
+      readCredential: (key) => creds.get(key)!,
+    });
+
+    const result = await handler.verify();
+    expect(result.ok).toBe(false);
+  });
+});
+```
+
+Use `carapace doctor --live` as a development workflow tool to verify your
+plugin works end-to-end after changing credentials or handler code.
 
 ### Running Tests
 

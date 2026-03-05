@@ -88,6 +88,11 @@ export interface CoreServices {
    * Throws if the key is invalid or the file does not exist.
    */
   readCredential(key: string): string;
+  /**
+   * When true, handler is in verify-only mode. Skip starting polling,
+   * listeners, or other background work during initialize().
+   */
+  verifyOnly?: boolean;
 }
 
 // ---------------------------------------------------------------------------

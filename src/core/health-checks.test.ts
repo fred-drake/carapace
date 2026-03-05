@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   checkNodeVersion,
   checkContainerRuntime,
@@ -11,11 +11,15 @@ import {
   checkStaleSockets,
   checkSocketPathLength,
   checkImageVersion,
+  checkPlugins,
   runAllChecks,
+  runLiveVerification,
   type HealthCheckResult,
   type HealthCheckDeps,
 } from './health-checks.js';
 import { MockContainerRuntime } from './container/mock-runtime.js';
+import type { PluginHandler, PluginLoadResult, PluginSource } from './plugin-handler.js';
+import type { DiscoveredPlugin } from './plugin-loader.js';
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -477,5 +481,536 @@ describe('checkImageVersion', () => {
     const results = await runAllChecks(deps);
     const check = results.find((r) => r.name === 'image-version');
     expect(check!.fix).toContain('carapace update');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// checkPlugins
+// ---------------------------------------------------------------------------
+
+const VALID_MANIFEST = JSON.stringify({
+  description: 'Test plugin',
+  version: '1.0.0',
+  app_compat: '>=0.1.0',
+  author: { name: 'Test' },
+  provides: { channels: [], tools: [] },
+  subscribes: [],
+});
+
+const MANIFEST_WITH_TOOL = JSON.stringify({
+  description: 'Plugin with tool',
+  version: '0.2.0',
+  app_compat: '>=0.1.0',
+  author: { name: 'Test' },
+  provides: {
+    channels: [],
+    tools: [
+      {
+        name: 'my_tool',
+        description: 'A tool',
+        risk_level: 'low',
+        arguments_schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { text: { type: 'string' } },
+        },
+      },
+    ],
+  },
+  subscribes: [],
+});
+
+const MANIFEST_WITH_CREDS = JSON.stringify({
+  description: 'Plugin with creds',
+  version: '0.1.0',
+  app_compat: '>=0.1.0',
+  author: { name: 'Test' },
+  provides: { channels: [], tools: [] },
+  subscribes: [],
+  install: {
+    credentials: [{ key: 'bot-token', description: 'Bot token', required: true }],
+  },
+});
+
+const MANIFEST_WITH_OPTIONAL_CRED = JSON.stringify({
+  description: 'Plugin with optional cred',
+  version: '0.1.0',
+  app_compat: '>=0.1.0',
+  author: { name: 'Test' },
+  provides: { channels: [], tools: [] },
+  subscribes: [],
+  install: {
+    credentials: [
+      { key: 'api-key', description: 'API key', required: true },
+      { key: 'webhook-secret', description: 'Optional secret', required: false },
+    ],
+  },
+});
+
+describe('checkPlugins', () => {
+  it('returns empty array when readFile is not provided (backward compat)', () => {
+    const deps = createTestDeps();
+    const results = checkPlugins(deps);
+    expect(results).toEqual([]);
+  });
+
+  it('returns empty array when fileExists is not provided', () => {
+    const deps = createTestDeps({ readFile: () => '' });
+    const results = checkPlugins(deps);
+    expect(results).toEqual([]);
+  });
+
+  it('passes for valid manifest with version and tool count', () => {
+    const deps = createTestDeps({
+      pluginDirs: ['/plugins'],
+      listDir: (dir: string) => (dir === '/plugins' ? ['hello'] : []),
+      readFile: () => MANIFEST_WITH_TOOL,
+      fileExists: () => true,
+    });
+    const results = checkPlugins(deps);
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('pass');
+    expect(results[0].detail).toContain('v0.2.0');
+    expect(results[0].detail).toContain('1 tool');
+  });
+
+  it('reports correct plural for multiple tools', () => {
+    const deps = createTestDeps({
+      pluginDirs: ['/plugins'],
+      listDir: (dir: string) => (dir === '/plugins' ? ['hello'] : []),
+      readFile: () => VALID_MANIFEST,
+      fileExists: () => true,
+    });
+    const results = checkPlugins(deps);
+    expect(results[0].detail).toContain('0 tools');
+  });
+
+  it('fails for invalid JSON', () => {
+    const deps = createTestDeps({
+      pluginDirs: ['/plugins'],
+      listDir: (dir: string) => (dir === '/plugins' ? ['bad'] : []),
+      readFile: () => '{ not valid json',
+      fileExists: () => true,
+    });
+    const results = checkPlugins(deps);
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('fail');
+    expect(results[0].detail).toContain('Invalid JSON');
+  });
+
+  it('fails for schema-invalid manifest', () => {
+    const deps = createTestDeps({
+      pluginDirs: ['/plugins'],
+      listDir: (dir: string) => (dir === '/plugins' ? ['broken'] : []),
+      readFile: () => JSON.stringify({ description: 'missing fields' }),
+      fileExists: () => true,
+    });
+    const results = checkPlugins(deps);
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('fail');
+    expect(results[0].detail).toContain('Schema validation failed');
+  });
+
+  it('fails when required credential is missing', () => {
+    const deps = createTestDeps({
+      pluginDirs: ['/plugins'],
+      credentialsPluginsDir: '/creds/plugins',
+      listDir: (dir: string) => (dir === '/plugins' ? ['telegram'] : []),
+      readFile: () => MANIFEST_WITH_CREDS,
+      fileExists: (path: string) => {
+        if (path.includes('bot-token')) return false;
+        return true; // manifest.json exists
+      },
+    });
+    const results = checkPlugins(deps);
+    const credResult = results.find((r) => r.name === 'plugin-creds-telegram');
+    expect(credResult).toBeDefined();
+    expect(credResult!.status).toBe('fail');
+    expect(credResult!.detail).toContain('bot-token');
+    expect(credResult!.fix).toContain('/creds/plugins/telegram/bot-token');
+  });
+
+  it('passes when all credentials are present', () => {
+    const deps = createTestDeps({
+      pluginDirs: ['/plugins'],
+      credentialsPluginsDir: '/creds/plugins',
+      listDir: (dir: string) => (dir === '/plugins' ? ['telegram'] : []),
+      readFile: () => MANIFEST_WITH_CREDS,
+      fileExists: () => true,
+    });
+    const results = checkPlugins(deps);
+    const credResult = results.find((r) => r.name === 'plugin-creds-telegram');
+    expect(credResult).toBeDefined();
+    expect(credResult!.status).toBe('pass');
+    expect(credResult!.detail).toContain('1 credential present');
+  });
+
+  it('warns when optional credential is missing', () => {
+    const deps = createTestDeps({
+      pluginDirs: ['/plugins'],
+      credentialsPluginsDir: '/creds/plugins',
+      listDir: (dir: string) => (dir === '/plugins' ? ['svc'] : []),
+      readFile: () => MANIFEST_WITH_OPTIONAL_CRED,
+      fileExists: (path: string) => {
+        if (path.includes('webhook-secret')) return false;
+        return true;
+      },
+    });
+    const results = checkPlugins(deps);
+    const credResult = results.find((r) => r.name === 'plugin-creds-svc');
+    expect(credResult).toBeDefined();
+    expect(credResult!.status).toBe('warn');
+    expect(credResult!.detail).toContain('webhook-secret');
+  });
+
+  it('does not emit credential result when no credentials declared', () => {
+    const deps = createTestDeps({
+      pluginDirs: ['/plugins'],
+      credentialsPluginsDir: '/creds/plugins',
+      listDir: (dir: string) => (dir === '/plugins' ? ['hello'] : []),
+      readFile: () => VALID_MANIFEST,
+      fileExists: () => true,
+    });
+    const results = checkPlugins(deps);
+    expect(results).toHaveLength(1);
+    expect(results[0].name).toBe('plugin-hello');
+  });
+
+  it('skips non-existent plugin directory gracefully', () => {
+    const deps = createTestDeps({
+      pluginDirs: ['/nonexistent'],
+      listDir: () => {
+        throw new Error('ENOENT');
+      },
+      readFile: () => '',
+      fileExists: () => false,
+    });
+    const results = checkPlugins(deps);
+    expect(results).toEqual([]);
+  });
+
+  it('scans both pluginDirs and builtinPluginsDir', () => {
+    const deps = createTestDeps({
+      pluginDirs: ['/plugins'],
+      builtinPluginsDir: '/builtin',
+      listDir: (dir: string) => {
+        if (dir === '/plugins') return ['user-plugin'];
+        if (dir === '/builtin') return ['core-plugin'];
+        return [];
+      },
+      readFile: () => VALID_MANIFEST,
+      fileExists: () => true,
+    });
+    const results = checkPlugins(deps);
+    expect(results).toHaveLength(2);
+    expect(results.map((r) => r.name)).toContain('plugin-user-plugin');
+    expect(results.map((r) => r.name)).toContain('plugin-core-plugin');
+  });
+
+  it('runAllChecks includes plugin results when deps are wired', async () => {
+    const deps = createTestDeps({
+      pluginDirs: ['/plugins'],
+      listDir: (dir: string) => (dir === '/plugins' ? ['test'] : []),
+      readFile: () => VALID_MANIFEST,
+      fileExists: () => true,
+    });
+    const results = await runAllChecks(deps);
+    const pluginResult = results.find((r) => r.name === 'plugin-test');
+    expect(pluginResult).toBeDefined();
+    expect(pluginResult!.status).toBe('pass');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runLiveVerification
+// ---------------------------------------------------------------------------
+
+// Mock factories — set per test
+let mockDiscovered: DiscoveredPlugin[] = [];
+let mockLoadResults: PluginLoadResult[] = [];
+let mockHandlers: Map<string, Partial<PluginHandler>> = new Map();
+let mockShutdownAll: ReturnType<typeof vi.fn>;
+let mockLoadPlugin: ReturnType<typeof vi.fn>;
+
+vi.mock('./plugin-loader.js', () => ({
+  PluginLoader: vi.fn().mockImplementation(() => ({
+    loadAll: vi.fn(async () => mockLoadResults),
+    discoverPlugins: vi.fn(async () => mockDiscovered),
+    loadPlugin: vi.fn(async (...args: unknown[]) => mockLoadPlugin(...args)),
+    getHandler: vi.fn((name: string) => mockHandlers.get(name)),
+    shutdownAll: vi.fn(async () => mockShutdownAll()),
+  })),
+}));
+
+vi.mock('./tool-catalog.js', () => ({
+  ToolCatalog: vi.fn().mockImplementation(() => ({})),
+}));
+
+describe('runLiveVerification', () => {
+  beforeEach(() => {
+    mockDiscovered = [];
+    mockLoadResults = [];
+    mockHandlers = new Map();
+    mockShutdownAll = vi.fn();
+    mockLoadPlugin = vi.fn();
+  });
+
+  it('handler with verify() returning ok: true → PASS', async () => {
+    const handler: Partial<PluginHandler> = {
+      verify: vi.fn(async () => ({ ok: true, message: 'Bot @test is reachable' })),
+    };
+    mockLoadResults = [
+      {
+        ok: true as const,
+        pluginName: 'telegram',
+        manifest: JSON.parse(VALID_MANIFEST),
+        handler: handler as PluginHandler,
+        source: 'user' as PluginSource,
+      },
+    ];
+    mockHandlers.set('telegram', handler);
+
+    const results = await runLiveVerification({
+      pluginsDir: '/plugins',
+      credentialsPluginsDir: '/creds/plugins',
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('pass');
+    expect(results[0].detail).toBe('Bot @test is reachable');
+    expect(results[0].name).toBe('live-telegram');
+  });
+
+  it('handler with verify() returning ok: false → FAIL', async () => {
+    const handler: Partial<PluginHandler> = {
+      verify: vi.fn(async () => ({ ok: false, message: '401 Unauthorized' })),
+    };
+    mockLoadResults = [
+      {
+        ok: true as const,
+        pluginName: 'telegram',
+        manifest: JSON.parse(VALID_MANIFEST),
+        handler: handler as PluginHandler,
+        source: 'user' as PluginSource,
+      },
+    ];
+    mockHandlers.set('telegram', handler);
+
+    const results = await runLiveVerification({
+      pluginsDir: '/plugins',
+      credentialsPluginsDir: '/creds/plugins',
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('fail');
+    expect(results[0].detail).toBe('401 Unauthorized');
+    expect(results[0].fix).toBeDefined();
+  });
+
+  it('handler without verify() → WARN', async () => {
+    const handler: Partial<PluginHandler> = {};
+    mockLoadResults = [
+      {
+        ok: true as const,
+        pluginName: 'hello',
+        manifest: JSON.parse(VALID_MANIFEST),
+        handler: handler as PluginHandler,
+        source: 'user' as PluginSource,
+      },
+    ];
+    mockHandlers.set('hello', handler);
+
+    const results = await runLiveVerification({
+      pluginsDir: '/plugins',
+      credentialsPluginsDir: '/creds/plugins',
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('warn');
+    expect(results[0].detail).toContain('No verify()');
+  });
+
+  it('verify() that throws → FAIL with error message', async () => {
+    const handler: Partial<PluginHandler> = {
+      verify: vi.fn(async () => {
+        throw new Error('Connection refused');
+      }),
+    };
+    mockLoadResults = [
+      {
+        ok: true as const,
+        pluginName: 'telegram',
+        manifest: JSON.parse(VALID_MANIFEST),
+        handler: handler as PluginHandler,
+        source: 'user' as PluginSource,
+      },
+    ];
+    mockHandlers.set('telegram', handler);
+
+    const results = await runLiveVerification({
+      pluginsDir: '/plugins',
+      credentialsPluginsDir: '/creds/plugins',
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('fail');
+    expect(results[0].detail).toBe('Connection refused');
+  });
+
+  it('verify() that times out → FAIL with timeout message', async () => {
+    const handler: Partial<PluginHandler> = {
+      verify: vi.fn(
+        () => new Promise<never>(() => {}), // never resolves
+      ),
+    };
+    mockLoadResults = [
+      {
+        ok: true as const,
+        pluginName: 'slow-plugin',
+        manifest: JSON.parse(VALID_MANIFEST),
+        handler: handler as PluginHandler,
+        source: 'user' as PluginSource,
+      },
+    ];
+    mockHandlers.set('slow-plugin', handler);
+
+    const results = await runLiveVerification({
+      pluginsDir: '/plugins',
+      credentialsPluginsDir: '/creds/plugins',
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('fail');
+    expect(results[0].detail).toContain('timed out');
+  }, 15_000);
+
+  it('pluginName filter → only loads/verifies the named plugin', async () => {
+    mockDiscovered = [
+      { name: 'telegram', dir: '/plugins/telegram', source: 'user' },
+      { name: 'hello', dir: '/plugins/hello', source: 'user' },
+    ];
+
+    const handler: Partial<PluginHandler> = {
+      verify: vi.fn(async () => ({ ok: true, message: 'OK' })),
+    };
+    mockLoadPlugin.mockResolvedValue({
+      ok: true,
+      pluginName: 'telegram',
+      manifest: JSON.parse(VALID_MANIFEST),
+      handler,
+      source: 'user',
+    });
+    mockHandlers.set('telegram', handler);
+
+    const results = await runLiveVerification({
+      pluginsDir: '/plugins',
+      credentialsPluginsDir: '/creds/plugins',
+      pluginName: 'telegram',
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].name).toBe('live-telegram');
+    expect(results[0].status).toBe('pass');
+  });
+
+  it('pluginName not found → FAIL', async () => {
+    mockDiscovered = [{ name: 'hello', dir: '/plugins/hello', source: 'user' }];
+
+    const results = await runLiveVerification({
+      pluginsDir: '/plugins',
+      credentialsPluginsDir: '/creds/plugins',
+      pluginName: 'nonexistent',
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('fail');
+    expect(results[0].detail).toContain('not found');
+  });
+
+  it('failed plugins from loadAll() → skipped', async () => {
+    const handler: Partial<PluginHandler> = {
+      verify: vi.fn(async () => ({ ok: true, message: 'OK' })),
+    };
+    mockLoadResults = [
+      {
+        ok: false as const,
+        pluginName: 'broken',
+        error: 'Bad manifest',
+        category: 'invalid_manifest',
+      },
+      {
+        ok: true as const,
+        pluginName: 'good',
+        manifest: JSON.parse(VALID_MANIFEST),
+        handler: handler as PluginHandler,
+        source: 'user' as PluginSource,
+      },
+    ];
+    mockHandlers.set('good', handler);
+
+    const results = await runLiveVerification({
+      pluginsDir: '/plugins',
+      credentialsPluginsDir: '/creds/plugins',
+    });
+
+    // Only the good plugin should have a live result
+    expect(results).toHaveLength(1);
+    expect(results[0].name).toBe('live-good');
+  });
+
+  it('shutdownAll() called after verification', async () => {
+    mockLoadResults = [];
+
+    await runLiveVerification({
+      pluginsDir: '/plugins',
+      credentialsPluginsDir: '/creds/plugins',
+    });
+
+    expect(mockShutdownAll).toHaveBeenCalled();
+  });
+
+  it('shutdownAll() called even when verify throws', async () => {
+    const handler: Partial<PluginHandler> = {
+      verify: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    };
+    mockLoadResults = [
+      {
+        ok: true as const,
+        pluginName: 'crashy',
+        manifest: JSON.parse(VALID_MANIFEST),
+        handler: handler as PluginHandler,
+        source: 'user' as PluginSource,
+      },
+    ];
+    mockHandlers.set('crashy', handler);
+
+    await runLiveVerification({
+      pluginsDir: '/plugins',
+      credentialsPluginsDir: '/creds/plugins',
+    });
+
+    expect(mockShutdownAll).toHaveBeenCalled();
+  });
+
+  it('single plugin load failure → FAIL result', async () => {
+    mockDiscovered = [{ name: 'bad', dir: '/plugins/bad', source: 'user' }];
+    mockLoadPlugin.mockResolvedValue({
+      ok: false,
+      pluginName: 'bad',
+      error: 'Missing handler.ts',
+      category: 'missing_handler',
+    });
+
+    const results = await runLiveVerification({
+      pluginsDir: '/plugins',
+      credentialsPluginsDir: '/creds/plugins',
+      pluginName: 'bad',
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0].status).toBe('fail');
+    expect(results[0].detail).toContain('Missing handler.ts');
   });
 });

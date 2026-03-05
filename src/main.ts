@@ -427,7 +427,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
     ensureDirs: (h: string) => ensureDirectoryStructure(h),
     exec,
     resolveModule,
-    pluginDirs: [],
+    pluginDirs: [join(home, 'plugins')],
     socketPath: join(home, 'run', 'sockets'),
     dirExists,
     isWritable,
@@ -471,6 +471,8 @@ export async function main(argv: string[] = process.argv): Promise<number> {
     },
     startServer: () => createStartServer(home, runtime),
     ensureDir: (path: string) => mkdirSync(path, { recursive: true }),
+    credentialsPluginsDir: join(home, 'credentials', 'plugins'),
+    builtinPluginsDir: join(home, 'lib', 'plugins'),
 
     // Image versioning — only wired when Dockerfile and runtime are available
     ...(runtime && projectRoot
