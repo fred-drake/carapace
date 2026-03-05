@@ -13,6 +13,13 @@
 
 import type { ContainerRuntime } from './container/runtime.js';
 import { isImageCurrent, parseLabels } from './image-identity.js';
+import _Ajv from 'ajv';
+import { MANIFEST_JSON_SCHEMA, type PluginManifest } from '../types/index.js';
+import type { PluginVerifyResult } from './plugin-handler.js';
+import { ToolCatalog } from './tool-catalog.js';
+import { PluginLoader } from './plugin-loader.js';
+
+const Ajv = _Ajv.default ?? _Ajv;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -63,6 +70,14 @@ export interface HealthCheckDeps {
   resolveGitSha?: () => Promise<string>;
   /** Image name to inspect. */
   imageName?: string;
+  /** Read a file's contents as string. */
+  readFile?: (path: string) => string;
+  /** Check if a file exists. */
+  fileExists?: (path: string) => boolean;
+  /** Credentials plugin directory (e.g. $CARAPACE_HOME/credentials/plugins). */
+  credentialsPluginsDir?: string;
+  /** Built-in plugins directory (e.g. $CARAPACE_HOME/lib/plugins). */
+  builtinPluginsDir?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -410,6 +425,268 @@ export async function checkImageVersion(deps: HealthCheckDeps): Promise<HealthCh
 }
 
 // ---------------------------------------------------------------------------
+// Plugin checks
+// ---------------------------------------------------------------------------
+
+/**
+ * Scan plugin directories and validate each plugin's manifest.json.
+ * Also checks that required credentials exist on disk.
+ *
+ * Returns an empty array if `readFile` is not provided (backward compat).
+ */
+export function checkPlugins(deps: HealthCheckDeps): HealthCheckResult[] {
+  if (!deps.readFile || !deps.fileExists) {
+    return [];
+  }
+
+  const { readFile, fileExists, pluginDirs, builtinPluginsDir, credentialsPluginsDir, listDir } =
+    deps;
+
+  const scanDirs = [...pluginDirs, ...(builtinPluginsDir ? [builtinPluginsDir] : [])].filter(
+    Boolean,
+  );
+
+  const ajv = new Ajv({ allErrors: true });
+  const validate = ajv.compile(MANIFEST_JSON_SCHEMA);
+  const results: HealthCheckResult[] = [];
+
+  for (const dir of scanDirs) {
+    let entries: string[];
+    try {
+      entries = listDir(dir);
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const manifestPath = `${dir}/${entry}/manifest.json`;
+      if (!fileExists(manifestPath)) {
+        continue;
+      }
+
+      // --- Manifest validation ---
+      let manifest: PluginManifest;
+      try {
+        const raw = readFile(manifestPath);
+        manifest = JSON.parse(raw) as PluginManifest;
+      } catch {
+        results.push({
+          name: `plugin-${entry}`,
+          label: `Plugin: ${entry}`,
+          status: 'fail',
+          detail: 'Invalid JSON in manifest.json',
+          fix: `Fix the JSON syntax in ${manifestPath}`,
+        });
+        continue;
+      }
+
+      if (!validate(manifest)) {
+        const errors = validate.errors?.map((e) => `${e.instancePath} ${e.message}`).join('; ');
+        results.push({
+          name: `plugin-${entry}`,
+          label: `Plugin: ${entry}`,
+          status: 'fail',
+          detail: `Schema validation failed: ${errors}`,
+          fix: `Fix manifest.json in ${dir}/${entry}/`,
+        });
+        continue;
+      }
+
+      const toolCount = manifest.provides?.tools?.length ?? 0;
+      results.push({
+        name: `plugin-${entry}`,
+        label: `Plugin: ${entry}`,
+        status: 'pass',
+        detail: `v${manifest.version} — ${toolCount} tool${toolCount !== 1 ? 's' : ''}`,
+      });
+
+      // --- Credential checks ---
+      const credentials = manifest.install?.credentials;
+      if (!credentials || credentials.length === 0 || !credentialsPluginsDir) {
+        continue;
+      }
+
+      const missing: string[] = [];
+      const missingOptional: string[] = [];
+      let presentCount = 0;
+
+      for (const cred of credentials) {
+        const credPath = `${credentialsPluginsDir}/${entry}/${cred.key}`;
+        if (fileExists(credPath)) {
+          presentCount++;
+        } else if (cred.required) {
+          missing.push(cred.key);
+        } else {
+          missingOptional.push(cred.key);
+        }
+      }
+
+      if (missing.length > 0) {
+        results.push({
+          name: `plugin-creds-${entry}`,
+          label: `Plugin credentials: ${entry}`,
+          status: 'fail',
+          detail: `Missing required: ${missing.join(', ')}`,
+          fix: `Create file at ${credentialsPluginsDir}/${entry}/${missing[0]}`,
+        });
+      } else if (missingOptional.length > 0) {
+        results.push({
+          name: `plugin-creds-${entry}`,
+          label: `Plugin credentials: ${entry}`,
+          status: 'warn',
+          detail: `Missing optional: ${missingOptional.join(', ')}`,
+          fix: `Create file at ${credentialsPluginsDir}/${entry}/${missingOptional[0]}`,
+        });
+      } else {
+        results.push({
+          name: `plugin-creds-${entry}`,
+          label: `Plugin credentials: ${entry}`,
+          status: 'pass',
+          detail: `${presentCount} credential${presentCount !== 1 ? 's' : ''} present`,
+        });
+      }
+    }
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// Live verification
+// ---------------------------------------------------------------------------
+
+/** Timeout for individual verify() calls (ms). */
+const VERIFY_TIMEOUT_MS = 10_000;
+
+/**
+ * Load plugins with verifyOnly mode and call each handler's verify() method.
+ *
+ * Channel plugins get plain CoreServices without publishEvent() in standalone
+ * mode (no eventBus). This is intentional — verify() should never publish events.
+ */
+export async function runLiveVerification(opts: {
+  pluginsDir: string;
+  builtinPluginsDir?: string;
+  credentialsPluginsDir: string;
+  pluginName?: string;
+}): Promise<HealthCheckResult[]> {
+  const catalog = new ToolCatalog();
+  const loader = new PluginLoader({
+    toolCatalog: catalog,
+    userPluginsDir: opts.pluginsDir,
+    builtinPluginsDir: opts.builtinPluginsDir,
+    credentialsPluginsDir: opts.credentialsPluginsDir,
+    verifyOnly: true,
+  });
+
+  const results: HealthCheckResult[] = [];
+
+  try {
+    if (opts.pluginName) {
+      // Single plugin mode: discover, find match, load only that one
+      const discovered = await loader.discoverPlugins();
+      const match = discovered.find((p) => p.name === opts.pluginName);
+      if (!match) {
+        results.push({
+          name: `live-${opts.pluginName}`,
+          label: `Live: ${opts.pluginName}`,
+          status: 'fail',
+          detail: `Plugin "${opts.pluginName}" not found`,
+          fix: 'Check plugin name and ensure it exists in the plugins directory',
+        });
+        return results;
+      }
+
+      const loadResult = await loader.loadPlugin(match.dir, match.source);
+      if (!loadResult.ok) {
+        results.push({
+          name: `live-${opts.pluginName}`,
+          label: `Live: ${opts.pluginName}`,
+          status: 'fail',
+          detail: `Failed to load: ${loadResult.error}`,
+        });
+        return results;
+      }
+
+      const handler = loader.getHandler(opts.pluginName);
+      if (handler) {
+        results.push(await verifyHandler(opts.pluginName, handler));
+      }
+    } else {
+      // All plugins: load everything, skip failures (offline checks report those)
+      const loadResults = await loader.loadAll();
+      for (const lr of loadResults) {
+        if (!lr.ok) continue;
+        const handler = loader.getHandler(lr.pluginName);
+        if (handler) {
+          results.push(await verifyHandler(lr.pluginName, handler));
+        }
+      }
+    }
+  } finally {
+    await loader.shutdownAll();
+  }
+
+  return results;
+}
+
+/** Call a single handler's verify() method with timeout. */
+async function verifyHandler(
+  pluginName: string,
+  handler: { verify?(): Promise<PluginVerifyResult> },
+): Promise<HealthCheckResult> {
+  if (typeof handler.verify !== 'function') {
+    return {
+      name: `live-${pluginName}`,
+      label: `Live: ${pluginName}`,
+      status: 'warn',
+      detail: 'No verify() — implement verify() for live testing',
+    };
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const result = await Promise.race([
+      handler.verify(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('verify() timed out after 10s')),
+          VERIFY_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    clearTimeout(timer);
+
+    if (result.ok) {
+      return {
+        name: `live-${pluginName}`,
+        label: `Live: ${pluginName}`,
+        status: 'pass',
+        detail: result.message,
+      };
+    }
+
+    return {
+      name: `live-${pluginName}`,
+      label: `Live: ${pluginName}`,
+      status: 'fail',
+      detail: result.message,
+      fix: `Check credentials at the plugin's credential directory`,
+    };
+  } catch (err: unknown) {
+    clearTimeout(timer);
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      name: `live-${pluginName}`,
+      label: `Live: ${pluginName}`,
+      status: 'fail',
+      detail: message,
+      fix: `Check credentials at the plugin's credential directory`,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Runner
 // ---------------------------------------------------------------------------
 
@@ -428,6 +705,7 @@ export async function runAllChecks(deps: HealthCheckDeps): Promise<HealthCheckRe
   results.push(checkStaleSockets(deps.socketPath, deps.listDir));
   results.push(checkSocketPathLength(deps.socketPath, deps.platform));
   results.push(await checkImageVersion(deps));
+  results.push(...checkPlugins(deps));
 
   return results;
 }

@@ -13,10 +13,16 @@
  * The real `main()` wires production dependencies and calls `runCommand()`.
  */
 
+import { join } from 'node:path';
 import { VERSION } from './index.js';
 import type { ContainerRuntime } from './core/container/runtime.js';
 import type { CarapaceConfig, DirectoryStructure } from './types/config.js';
-import { runAllChecks, type ExecFn, type ResolveModuleFn } from './core/health-checks.js';
+import {
+  runAllChecks,
+  runLiveVerification,
+  type ExecFn,
+  type ResolveModuleFn,
+} from './core/health-checks.js';
 import { runUninstall, type UninstallDeps } from './uninstall.js';
 import {
   runAuthApiKey,
@@ -124,6 +130,10 @@ export interface CliDeps {
   imageName?: string;
   /** Create a directory (recursive). */
   ensureDir?: (path: string) => void;
+  /** Credentials plugin directory (e.g. $CARAPACE_HOME/credentials/plugins). */
+  credentialsPluginsDir?: string;
+  /** Built-in plugins directory (e.g. $CARAPACE_HOME/lib/plugins). */
+  builtinPluginsDir?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,7 +210,8 @@ Options:
   --help           Show this help message
   --yes            Skip confirmation prompts (uninstall)
   --dry-run        Show what would be done without acting (uninstall)
-  --group=NAME     Target group for prompt (default: "default")`;
+  --group=NAME     Target group for prompt (default: "default")
+  --live           Live-test plugin credentials (doctor)`;
 
 /**
  * Dispatch a command string to the appropriate handler.
@@ -233,7 +244,7 @@ export async function runCommand(
     case 'status':
       return status(deps);
     case 'doctor':
-      return doctor(deps);
+      return doctor(deps, flags, positionals);
     case 'prompt':
       return prompt(deps, options ?? {}, positionals ?? []);
     case 'reload':
@@ -259,7 +270,11 @@ export async function runCommand(
  * Delegates to the health-checks module for individual checks, then
  * displays results with fix suggestions for any failures.
  */
-export async function doctor(deps: CliDeps): Promise<number> {
+export async function doctor(
+  deps: CliDeps,
+  flags?: Record<string, boolean>,
+  positionals?: string[],
+): Promise<number> {
   // Ensure directory structure exists before checking writability
   deps.ensureDirs(deps.home);
 
@@ -275,7 +290,24 @@ export async function doctor(deps: CliDeps): Promise<number> {
     fileMode: deps.fileMode,
     listDir: deps.listDir,
     platform: deps.platform,
+    readFile: deps.readFile,
+    fileExists: deps.fileExists,
+    credentialsPluginsDir: deps.credentialsPluginsDir,
+    builtinPluginsDir: deps.builtinPluginsDir,
   });
+
+  // Live verification: load plugins and call verify()
+  if (flags?.['live']) {
+    const pluginName = positionals?.[0];
+    const liveResults = await runLiveVerification({
+      pluginsDir: join(deps.home, 'plugins'),
+      builtinPluginsDir: deps.builtinPluginsDir,
+      credentialsPluginsDir:
+        deps.credentialsPluginsDir ?? join(deps.home, 'credentials', 'plugins'),
+      pluginName,
+    });
+    results.push(...liveResults);
+  }
 
   for (const result of results) {
     if (result.status === 'pass') {
@@ -293,14 +325,14 @@ export async function doctor(deps: CliDeps): Promise<number> {
     }
   }
 
-  // Summary
+  // Summary — warnings are non-fatal (e.g. plugins without verify())
+  const failures = results.filter((r) => r.status === 'fail').length;
   const passed = results.filter((r) => r.status === 'pass').length;
   const total = results.length;
-  const allPassed = passed === total;
 
   deps.stdout(`\n${passed}/${total} checks passed`);
 
-  return allPassed ? 0 : 1;
+  return failures === 0 ? 0 : 1;
 }
 
 // ---------------------------------------------------------------------------

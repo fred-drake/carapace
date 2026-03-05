@@ -4,7 +4,8 @@
  * Enforces security invariants on the `$CARAPACE_HOME/credentials/` directory:
  * - Directory permissions: 0700 (owner-only)
  * - File permissions: 0600 (owner-only read/write)
- * - No symlinks (directory or file level)
+ * - Symlinks: allowed for reads (nix support), rejected for writes
+ * - Credential directory itself must not be a symlink
  * - Ownership validation (must be current user)
  * - Root warning
  * - Doctor integration via HealthCheckResult
@@ -17,14 +18,13 @@
 
 import {
   existsSync,
-  statSync,
   lstatSync,
   readdirSync,
   readFileSync,
   writeFileSync,
   chmodSync,
 } from 'node:fs';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve } from 'node:path';
 import type { HealthCheckResult } from '../core/health-checks.js';
 
 // ---------------------------------------------------------------------------
@@ -144,9 +144,10 @@ function scanDirectory(baseDir: string, dir: string, issues: string[]): void {
     const relativePath = fullPath.slice(baseDir.length + 1);
     const entryLstat = lstatSync(fullPath);
 
-    // Reject symlinks
+    // Symlinks are allowed (e.g. sops-nix provisions secrets as symlinks).
+    // Skip permission checks on symlinks — the target's permissions are
+    // managed by the secret provider (Nix store, etc.).
     if (entryLstat.isSymbolicLink()) {
-      issues.push(`Credential entry "${relativePath}" is a symlink — symlinks are not allowed`);
       continue;
     }
 
@@ -226,7 +227,16 @@ export function writeCredentialFile(filePath: string, content: string, credDir?:
 // ---------------------------------------------------------------------------
 
 /**
- * Read a credential file, rejecting symlinks.
+ * Read a credential file, following symlinks.
+ *
+ * Symlinks are allowed for reads to support Nix-managed secrets
+ * (e.g. sops-nix), which provision credentials as symlinks into the
+ * Nix store. Writes still reject symlinks to prevent redirect attacks.
+ *
+ * Trust model: The credential directory is 0700 (owner-only), so only
+ * the owner can create symlinks inside it. We trust the owner not to
+ * create malicious symlinks. This allows Nix-managed secrets (sops-nix)
+ * which provision credentials as symlinks into the Nix store.
  *
  * @param filePath - Absolute path to the credential file.
  * @returns The credential content.
@@ -236,11 +246,6 @@ export function readCredentialFile(filePath: string): string {
 
   if (!existsSync(resolved)) {
     throw new Error(`Credential file not found: ${filePath}`);
-  }
-
-  const entryLstat = lstatSync(resolved);
-  if (entryLstat.isSymbolicLink()) {
-    throw new Error(`Refusing to read credential file through symlink: ${filePath}`);
   }
 
   return readFileSync(resolved, 'utf-8');

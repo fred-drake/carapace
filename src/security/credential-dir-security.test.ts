@@ -2,8 +2,9 @@
  * Tests for the credential directory security model.
  *
  * Covers: directory permissions (0700), file permissions (0600),
- * symlink rejection, ownership validation, root warning, and
- * doctor integration via health check interface.
+ * symlink handling (allowed for reads/nix, rejected for writes),
+ * ownership validation, root warning, and doctor integration via
+ * health check interface.
  *
  * SEC-18
  */
@@ -141,15 +142,15 @@ describe('verifyCredentialDirectory', () => {
     expect(result.issues).toHaveLength(0);
   });
 
-  it('should reject symlink files inside credential directory', () => {
+  it('should allow symlink files inside credential directory (nix support)', () => {
     const realFile = join(tempRoot, 'real-secret.txt');
     writeFileSync(realFile, 'secret', { mode: 0o600 });
     const linkFile = join(credDir, 'linked-secret.txt');
     symlinkSync(realFile, linkFile);
 
     const result = verifyCredentialDirectory(credDir);
-    expect(result.valid).toBe(false);
-    expect(result.issues.some((i) => i.includes('symlink'))).toBe(true);
+    expect(result.valid).toBe(true);
+    expect(result.issues).toHaveLength(0);
   });
 
   it('should detect world-readable files (0644)', () => {
@@ -272,13 +273,14 @@ describe('readCredentialFile', () => {
     expect(content).toBe('my-credential');
   });
 
-  it('should reject reading through symlinks', () => {
+  it('should follow symlinks when reading', () => {
     const realFile = join(tempRoot, 'real-cred.txt');
     writeFileSync(realFile, 'secret', { mode: 0o600 });
     const linkFile = join(credDir, 'symlink-cred.txt');
     symlinkSync(realFile, linkFile);
 
-    expect(() => readCredentialFile(linkFile)).toThrow(/symlink/i);
+    const content = readCredentialFile(linkFile);
+    expect(content).toBe('secret');
   });
 
   it('should throw for nonexistent file', () => {
